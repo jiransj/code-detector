@@ -1,0 +1,15 @@
+# code-detector 默认配置文件
+# 可以在此文件中覆盖或扩展语言定义
+# 如果文件不存在或读取失败，会使用内置默认配置
+languages:
+  # - name: "go"
+  #   extensions: [".go"]
+  #   function_regex: "func\\s+(?P<name>\\w+)\\s*\\("
+  #   single_comment: ["//"]
+  #   block_comment: [["/*", "*/"]]
+
+  # - name: "python"
+  #   extensions: [".py"]
+  #   function_regex: "^\\s*def\\s+(?P<name>\\w+)\\s*\\("
+  #   single_comment: ["#"]
+  #   block_comment: [['"""', '"""'], ["'''", "'''"]]

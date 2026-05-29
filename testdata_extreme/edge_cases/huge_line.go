@@ -1,0 +1,2 @@
+// Edge case: 巨大的单行文件（单行包含很多字符，括号跨越多层）
+package main; import "fmt"; type S struct{ v int }; func (s *S) Get() int { return s.v }; func (s *S) Set(v int) { s.v = v }; func F1() int { return 1 }; func F2() int { a := 1; b := 2; c := 3; d := 4; e := 5; return a + b + c + d + e }; func F3(x, y int) int { if x > y { return x } else { return y } }; func F4() { fmt.Println("hello") }; func F5() {}; func main() { F1(); F2(1, 2); F3(1, 2, 3); F4(); F5() }

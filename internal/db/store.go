@@ -1,0 +1,577 @@
+package db
+
+import (
+	"context"
+	"crypto/sha256"
+	"database/sql"
+	"fmt"
+	"sort"
+	"sync"
+	"time"
+
+	"code-detector/internal/model"
+)
+
+// Store 封装所有数据库 CRUD 操作
+type Store struct {
+	DB *sql.DB
+	mu sync.Mutex // 保护写入操作，防止并发竞态
+}
+
+// NewStore 创建 Store 实例
+func NewStore(db *sql.DB) *Store {
+	return &Store{DB: db}
+}
+
+// CreateSession 创建一次扫描会话，返回 session_id
+// 创建后会清理超过 3 个的旧历史会话，防止 DB 膨胀
+func (s *Store) CreateSession(root string) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now()
+	res, err := s.DB.Exec(
+		`INSERT INTO scan_sessions (project_root, scan_time) VALUES (?, ?)`,
+		root, now,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("create session: %w", err)
+	}
+
+	newID, err := res.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("last insert id: %w", err)
+	}
+
+	// 保留最多 3 个历史 session，删除更旧的
+	if err := s.pruneOldSessionsLocked(3); err != nil {
+		return 0, fmt.Errorf("prune old sessions: %w", err)
+	}
+
+	return newID, nil
+}
+
+// pruneOldSessionsLocked 清理超出 keepCount 的旧会话（调用方需持有 mu 锁）
+// 按 session_id 保留最新的 keepCount 条，删除其余及其关联数据
+func (s *Store) pruneOldSessionsLocked(keepCount int) error {
+	// 查出需要删除的旧 session ID（跳过最新的 keepCount 个）
+	rows, err := s.DB.Query(
+		`SELECT id FROM scan_sessions ORDER BY id DESC LIMIT -1 OFFSET ?`, keepCount,
+	)
+	if err != nil {
+		return fmt.Errorf("query old sessions: %w", err)
+	}
+	defer rows.Close()
+
+	var oldIDs []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return fmt.Errorf("scan old session id: %w", err)
+		}
+		oldIDs = append(oldIDs, id)
+	}
+	rows.Close()
+
+	if len(oldIDs) == 0 {
+		return nil
+	}
+
+	// 构建 IN 子句
+	for _, sid := range oldIDs {
+		// 按外键依赖顺序删除：function_deps → functions → global_vars → file_cache → scan_sessions
+		if _, err := s.DB.Exec(
+			`DELETE FROM function_deps WHERE caller_id IN (SELECT id FROM functions WHERE session_id = ?)`, sid,
+		); err != nil {
+			return fmt.Errorf("delete deps for session %d: %w", sid, err)
+		}
+		if _, err := s.DB.Exec(`DELETE FROM functions WHERE session_id = ?`, sid); err != nil {
+			return fmt.Errorf("delete functions for session %d: %w", sid, err)
+		}
+		if _, err := s.DB.Exec(`DELETE FROM global_vars WHERE session_id = ?`, sid); err != nil {
+			return fmt.Errorf("delete vars for session %d: %w", sid, err)
+		}
+		if _, err := s.DB.Exec(`DELETE FROM file_cache WHERE session_id = ?`, sid); err != nil {
+			return fmt.Errorf("delete cache for session %d: %w", sid, err)
+		}
+		if _, err := s.DB.Exec(`DELETE FROM scan_sessions WHERE id = ?`, sid); err != nil {
+			return fmt.Errorf("delete session %d: %w", sid, err)
+		}
+	}
+
+	return nil
+}
+
+// UpdateSession 扫描完成后更新会话统计
+func (s *Store) UpdateSession(sessionID int64, duration time.Duration, fileCount, funcCount, varCount int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	_, err := s.DB.Exec(
+		`UPDATE scan_sessions SET duration_ms=?, file_count=?, func_count=?, var_count=? WHERE id=?`,
+		duration.Milliseconds(), fileCount, funcCount, varCount, sessionID,
+	)
+	return err
+}
+
+// InsertFunction 插入一条函数记录，返回函数 ID
+func (s *Store) InsertFunction(f *model.Function, sessionID int64) (int64, error) {
+	res, err := s.DB.Exec(
+		`INSERT INTO functions (session_id, name, package_name, language, file_path, line_start, line_end, body, call_count, nesting_depth)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		sessionID, f.Name, f.PackageName, f.Language, f.FilePath, f.LineStart, f.LineEnd, f.Body, f.CallCount, f.NestingDepth,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("insert function: %w", err)
+	}
+	return res.LastInsertId()
+}
+
+// InsertDependency 插入一条函数依赖关系
+func (s *Store) InsertDependency(callerID int64, calleeName string) error {
+	_, err := s.DB.Exec(
+		`INSERT INTO function_deps (caller_id, callee_name) VALUES (?, ?)`,
+		callerID, calleeName,
+	)
+	return err
+}
+
+// FuncHash 计算函数的唯一哈希值
+func FuncHash(f *model.Function) string {
+	sort.Strings(f.Dependencies)
+	data := fmt.Sprintf("%s|%s|%s|%s|%d|%s|%v|%d|%d", f.Name, f.PackageName, f.Language, f.FilePath, f.LineStart, f.Body, f.Dependencies, f.CallCount, f.NestingDepth)
+	h := sha256.Sum256([]byte(data))
+	return fmt.Sprintf("%x", h[:16]) // 前 16 字节足够
+}
+
+// VarHash 计算全局变量的唯一哈希值
+func VarHash(v *model.GlobalVariable) string {
+	data := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%d|%v", v.Name, v.VarType, v.Language, v.PackageName, v.Visibility, v.FilePath, v.LineNum, v.IsConst)
+	h := sha256.Sum256([]byte(data))
+	return fmt.Sprintf("%x", h[:16])
+}
+
+// buildInClause 安全构建 IN 查询的前半部分（不含 WHERE 前缀）和参数列表
+// 返回: "column IN (?, ?, ...)" 和对应的参数切片
+func buildInClause(column string, values []string) (string, []interface{}) {
+	if len(values) == 0 {
+		return column + " IN (NULL)", nil
+	}
+	args := make([]interface{}, len(values))
+	clause := column + " IN (?"
+	for i := 1; i < len(values); i++ {
+		clause += ", ?"
+	}
+	clause += ")"
+	for i, v := range values {
+		args[i] = v
+	}
+	return clause, args
+}
+
+// CheckExistingFuncHashes 查询已有函数的 hash，返回 map[hash]id
+// 限定当前 session_id，防止跨 session 误删历史数据
+func (s *Store) CheckExistingFuncHashes(sessionID int64, funcs []*model.Function) (map[string]int64, map[string]int64, error) {
+	existing := make(map[string]int64) // "file:name:line" → id
+	hashMap := make(map[string]int64)  // hash → id
+
+	if len(funcs) == 0 {
+		return existing, hashMap, nil
+	}
+
+	// 收集唯一的文件路径，只查询相关文件（避免全表扫描）
+	seenFiles := make(map[string]bool)
+	filePaths := make([]string, 0, len(funcs))
+	for _, f := range funcs {
+		if !seenFiles[f.FilePath] {
+			seenFiles[f.FilePath] = true
+			filePaths = append(filePaths, f.FilePath)
+		}
+	}
+
+	// 使用安全辅助函数构建 IN 查询
+	inClause, args := buildInClause("file_path", filePaths)
+	query := `SELECT id, file_path, name, line_start, hash FROM functions WHERE session_id = ? AND ` + inClause
+	queryArgs := append([]interface{}{sessionID}, args...)
+
+	rows, err := s.DB.Query(query, queryArgs...)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id int64
+		var fp, name, hash string
+		var ls int
+		rows.Scan(&id, &fp, &name, &ls, &hash)
+		key := fmt.Sprintf("%s:%s:%d", fp, name, ls)
+		existing[key] = id
+		if hash != "" {
+			hashMap[hash] = id
+		}
+	}
+	return existing, hashMap, rows.Err()
+}
+
+// BatchInsertFunctions 批量插入函数（事务内），带哈希去重
+// 返回 (新插入的ID列表, 跳过的数量, 变更的数量)
+func (s *Store) BatchInsertFunctions(functions []*model.Function, sessionID int64) ([]int64, int, int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// 先查询已有的函数
+	existing, hashMap, err := s.CheckExistingFuncHashes(sessionID, functions)
+	if err != nil {
+		return nil, 0, 0, fmt.Errorf("query existing: %w", err)
+	}
+
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return nil, 0, 0, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(
+		`INSERT INTO functions (session_id, name, package_name, language, file_path, line_start, line_end, body, hash, call_count, nesting_depth)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	)
+	if err != nil {
+		return nil, 0, 0, fmt.Errorf("prepare stmt: %w", err)
+	}
+	defer stmt.Close()
+
+	ids := make([]int64, 0, len(functions))
+	skipped := 0
+	changed := 0
+
+	// 构建反向映射 id→hash，避免 O(n²) 查找
+	idToHash := make(map[int64]string, len(hashMap))
+	for h, id := range hashMap {
+		idToHash[id] = h
+	}
+
+	for _, f := range functions {
+		hash := FuncHash(f)
+		f.Hash = hash
+
+		// 检查是否已存在（相同 session + file + name + line）
+		key := fmt.Sprintf("%s:%s:%d", f.FilePath, f.Name, f.LineStart)
+		if oldID, exists := existing[key]; exists {
+			// 存在：用反向映射 O(1) 比较 hash
+			if oldHash, ok := idToHash[oldID]; ok && oldHash == hash {
+				// 完全一致，跳过
+				ids = append(ids, oldID)
+				skipped++
+				continue
+			}
+			// hash 不同：内容已变更，删除旧记录，插入新记录
+			if _, err := tx.Exec(`DELETE FROM function_deps WHERE caller_id = ?`, oldID); err != nil {
+				return nil, 0, 0, fmt.Errorf("delete old deps: %w", err)
+			}
+			if _, err := tx.Exec(`DELETE FROM functions WHERE id = ?`, oldID); err != nil {
+				return nil, 0, 0, fmt.Errorf("delete old func: %w", err)
+			}
+			changed++
+		}
+
+		// 插入新记录
+		res, err := stmt.Exec(sessionID, f.Name, f.PackageName, f.Language, f.FilePath, f.LineStart, f.LineEnd, f.Body, hash, f.CallCount, f.NestingDepth)
+		if err != nil {
+			return nil, 0, 0, fmt.Errorf("insert function %s: %w", f.Name, err)
+		}
+		newID, _ := res.LastInsertId()
+		ids = append(ids, newID)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, 0, 0, fmt.Errorf("commit tx: %w", err)
+	}
+	return ids, skipped, changed, nil
+}
+
+// BatchInsertDeps 批量插入依赖关系（事务内）
+func (s *Store) BatchInsertDeps(deps map[int64][]string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO function_deps (caller_id, callee_name) VALUES (?, ?)`)
+	if err != nil {
+		return fmt.Errorf("prepare stmt: %w", err)
+	}
+	defer stmt.Close()
+
+	for callerID, callees := range deps {
+		for _, callee := range callees {
+			if _, err := stmt.Exec(callerID, callee); err != nil {
+				return fmt.Errorf("insert dep %d->%s: %w", callerID, callee, err)
+			}
+		}
+	}
+
+	return tx.Commit()
+}
+
+// QueryFunctionsByLanguage 按语言查询函数
+func (s *Store) QueryFunctionsByLanguage(lang string) ([]*model.Function, error) {
+	rows, err := s.DB.Query(
+		`SELECT id, session_id, name, package_name, language, file_path, line_start, line_end, body, call_count, nesting_depth
+		 FROM functions WHERE language = ? ORDER BY file_path, line_start`, lang,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var funcs []*model.Function
+	for rows.Next() {
+		f := &model.Function{}
+		if err := rows.Scan(&f.ID, &f.SessionID, &f.Name, &f.PackageName, &f.Language, &f.FilePath,
+			&f.LineStart, &f.LineEnd, &f.Body, &f.CallCount, &f.NestingDepth); err != nil {
+			return nil, err
+		}
+		funcs = append(funcs, f)
+	}
+	return funcs, rows.Err()
+}
+
+// QueryDependencies 查询指定函数的直接依赖
+func (s *Store) QueryDependencies(funcID int64) ([]string, error) {
+	rows, err := s.DB.Query(
+		`SELECT callee_name FROM function_deps WHERE caller_id = ? ORDER BY callee_name`, funcID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var deps []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		deps = append(deps, name)
+	}
+	return deps, rows.Err()
+}
+
+// QueryCallers 查询调用指定函数的所有调用方
+func (s *Store) QueryCallers(funcName string) ([]*model.Function, error) {
+	rows, err := s.DB.Query(
+		`SELECT f.id, f.session_id, f.name, f.package_name, f.language, f.file_path, f.line_start, f.line_end, f.body, f.call_count, f.nesting_depth
+		 FROM functions f
+		 INNER JOIN function_deps d ON f.id = d.caller_id
+		 WHERE d.callee_name = ?
+		 ORDER BY f.file_path, f.line_start`, funcName,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var funcs []*model.Function
+	for rows.Next() {
+		f := &model.Function{}
+		if err := rows.Scan(&f.ID, &f.SessionID, &f.Name, &f.PackageName, &f.Language, &f.FilePath,
+			&f.LineStart, &f.LineEnd, &f.Body, &f.CallCount, &f.NestingDepth); err != nil {
+			return nil, err
+		}
+		funcs = append(funcs, f)
+	}
+	return funcs, rows.Err()
+}
+
+// QueryAllSessions 查询所有扫描会话
+func (s *Store) QueryAllSessions() ([]*model.ScanSession, error) {
+	rows, err := s.DB.Query(
+		`SELECT id, project_root, scan_time, duration_ms, file_count, func_count
+		 FROM scan_sessions ORDER BY scan_time DESC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var sessions []*model.ScanSession
+	for rows.Next() {
+		ss := &model.ScanSession{}
+		if err := rows.Scan(&ss.ID, &ss.ProjectRoot, &ss.ScanTime,
+			&ss.Duration, &ss.FileCount, &ss.FuncCount); err != nil {
+			return nil, err
+		}
+		sessions = append(sessions, ss)
+	}
+	return sessions, rows.Err()
+}
+
+// BatchInsertGlobalVars 批量插入全局变量（事务内）
+func (s *Store) BatchInsertGlobalVars(vars []*model.GlobalVariable, sessionID int64) (int, int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// 查询已有的全局变量
+	existing := make(map[string]int64) // "file:name:line" → id
+	hashMap := make(map[string]int64)  // hash → id
+
+	rows, err := s.DB.Query(
+		`SELECT id, file_path, name, line_num, hash FROM global_vars`,
+	)
+	if err != nil {
+		return 0, 0, fmt.Errorf("query existing vars: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id int64
+		var fp, name, hash string
+		var ln int
+		rows.Scan(&id, &fp, &name, &ln, &hash)
+		key := fmt.Sprintf("%s:%s:%d", fp, name, ln)
+		existing[key] = id
+		if hash != "" {
+			hashMap[hash] = id
+		}
+	}
+	rows.Close()
+
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return 0, 0, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(
+		`INSERT INTO global_vars (session_id, name, var_type, language, package_name, visibility, file_path, line_num, is_const, hash)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	)
+	if err != nil {
+		return 0, 0, fmt.Errorf("prepare stmt: %w", err)
+	}
+	defer stmt.Close()
+
+	skipped := 0
+	changed := 0
+
+	for _, v := range vars {
+		isConst := 0
+		if v.IsConst {
+			isConst = 1
+		}
+		hash := VarHash(v)
+		key := fmt.Sprintf("%s:%s:%d", v.FilePath, v.Name, v.LineNum)
+
+		if oldID, exists := existing[key]; exists {
+			found := false
+			for h, id := range hashMap {
+				if id == oldID && h == hash {
+					found = true
+					break
+				}
+			}
+			if found {
+				skipped++
+				continue
+			}
+			if _, err := tx.Exec(`DELETE FROM global_vars WHERE id = ?`, oldID); err != nil {
+				return 0, 0, fmt.Errorf("delete old var: %w", err)
+			}
+			changed++
+		}
+
+		if _, err := stmt.Exec(sessionID, v.Name, v.VarType, v.Language, v.PackageName, v.Visibility, v.FilePath, v.LineNum, isConst, hash); err != nil {
+			return 0, 0, fmt.Errorf("insert global var %s: %w", v.Name, err)
+		}
+	}
+
+	return skipped, changed, tx.Commit()
+}
+
+// QueryGlobalVarsByLanguage 按语言查询全局变量
+func (s *Store) QueryGlobalVarsByLanguage(lang string) ([]*model.GlobalVariable, error) {
+	rows, err := s.DB.Query(
+		`SELECT id, session_id, name, var_type, language, package_name, visibility, file_path, line_num, is_const
+		 FROM global_vars WHERE language = ? ORDER BY file_path, line_num`, lang,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var vars []*model.GlobalVariable
+	for rows.Next() {
+		v := &model.GlobalVariable{}
+		var isConst int
+		if err := rows.Scan(&v.ID, &v.SessionID, &v.Name, &v.VarType, &v.Language,
+			&v.PackageName, &v.Visibility, &v.FilePath, &v.LineNum, &isConst); err != nil {
+			return nil, err
+		}
+		v.IsConst = isConst != 0
+		vars = append(vars, v)
+	}
+	return vars, rows.Err()
+}
+
+// ---- 文件缓存（增量扫描） ----
+
+// GetFileCache 查询文件的缓存信息（mtime + hash）
+// 返回 (mtime_unix, hash, found, error)
+func (s *Store) GetFileCache(filePath string) (int64, string, bool, error) {
+	row := s.DB.QueryRow(
+		`SELECT mtime, hash FROM file_cache WHERE file_path = ?`, filePath,
+	)
+	var mtime int64
+	var hash string
+	err := row.Scan(&mtime, &hash)
+	if err == sql.ErrNoRows {
+		return 0, "", false, nil
+	}
+	if err != nil {
+		return 0, "", false, fmt.Errorf("query file cache: %w", err)
+	}
+	return mtime, hash, true, nil
+}
+
+// UpsertFileCache 插入或更新文件缓存
+func (s *Store) UpsertFileCache(filePath string, mtime int64, hash string, sessionID int64) error {
+	_, err := s.DB.Exec(
+		`INSERT INTO file_cache (file_path, mtime, hash, session_id)
+		 VALUES (?, ?, ?, ?)
+		 ON CONFLICT(file_path) DO UPDATE SET mtime=excluded.mtime, hash=excluded.hash, session_id=excluded.session_id`,
+		filePath, mtime, hash, sessionID,
+	)
+	if err != nil {
+		return fmt.Errorf("upsert file cache: %w", err)
+	}
+	return nil
+}
+
+// ClearFileCache 清理指定 session 之前的缓存（全量扫描后使用）
+func (s *Store) ClearFileCache(sessionID int64) error {
+	_, err := s.DB.Exec(`DELETE FROM file_cache WHERE session_id < ?`, sessionID)
+	return err
+}
+
+// Checkpoint 将 WAL 内容回写到主数据库文件
+// 使用 pinned connection 确保 PRAGMA 在同一连接上生效
+func (s *Store) Checkpoint() {
+	conn, err := s.DB.Conn(context.Background())
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+	// TRUNCATE 模式：checkpoint 后截断 WAL 文件
+	conn.ExecContext(context.Background(), "PRAGMA wal_checkpoint(TRUNCATE)")
+}
+
+// Close 关闭数据库连接（先 checkpoint 确保 WAL 回写）
+func (s *Store) Close() error {
+	s.Checkpoint()
+	return s.DB.Close()
+}

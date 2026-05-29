@@ -1,0 +1,6 @@
+// Edge case: 没有扩展名的文件（不应被任何解析器匹配）
+package main
+
+func NoExtFunc() string {
+	return "no extension"
+}

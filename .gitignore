@@ -1,0 +1,20 @@
+# 扫描结果数据库
+scaned_db/
+
+# 临时文件
+%TEMP%/
+
+# 构建产物
+build/
+*.exe
+*.test
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Go 缓存
+vendor/

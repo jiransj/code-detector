@@ -1,0 +1,7 @@
+// Edge case: 非常规扩展名
+// .go.txt 不应被 Go 解析器匹配
+package main
+
+func WrongExtFunc() string {
+	return "wrong extension"
+}
