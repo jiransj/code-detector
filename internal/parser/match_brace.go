@@ -42,7 +42,7 @@ func matchBrace(text string, openPos int) (int, error) {
 				for i < len(text) {
 					if text[i] == ')' && i+1+len(delim) < len(text) &&
 						text[i+1:i+1+len(delim)] == delim &&
-						i+1+len(delim) < len(text) && text[i+1+len(delim)] == '"' {
+						text[i+1+len(delim)] == '"' {
 						i = i + 1 + len(delim) + 1 // 跳过 )delimiter"
 						break
 					}

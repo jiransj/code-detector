@@ -249,6 +249,12 @@ func (s *Scanner) parseConcurrently(files []string, absRoot string, sessionID in
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					errMsg := fmt.Sprintf("worker panic: %v", r)
+					results <- parseResult{path: "[panic]", err: fmt.Errorf("%s", errMsg)}
+				}
+			}()
 			for job := range jobs {
 				funcs, globals, err := s.parseFile(job.path)
 				if err == nil && s.Incremental {

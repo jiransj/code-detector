@@ -91,12 +91,15 @@ func (a *Analyzer) BuildCallGraph(sessionID int64) (*CallGraph, error) {
 		return nil, err
 	}
 
-	// 第二遍：填充调用/被调用关系
+	// 第二遍：使用 JOIN 一次性加载所有依赖关系（消除 N+1 查询）
+	allDeps, err := a.Store.QueryDependenciesBySession(sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("query all deps by session: %w", err)
+	}
+
+	// 填充调用/被调用关系
 	for _, node := range graph.Nodes {
-		deps, err := a.Store.QueryDependencies(node.Function.ID)
-		if err != nil {
-			return nil, fmt.Errorf("query deps for %s: %w", node.Qualified, err)
-		}
+		deps := allDeps[node.Function.ID]
 		for _, dep := range deps {
 			node.Callees = append(node.Callees, dep)
 
