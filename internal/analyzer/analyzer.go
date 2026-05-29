@@ -61,6 +61,9 @@ func (a *Analyzer) BuildCallGraph(sessionID int64) (*CallGraph, error) {
 		IDIndex:        make(map[int64]*FuncNode),
 		plainNameIndex: make(map[string][]*FuncNode),
 	}
+	// 按包名 + 函数名二次索引，用于同包优先匹配
+	type pkgKey struct{ pkg, name string }
+	pkgFuncIndex := make(map[pkgKey]*FuncNode)
 
 	// 第一遍：收集所有函数节点
 	for rows.Next() {
@@ -79,6 +82,10 @@ func (a *Analyzer) BuildCallGraph(sessionID int64) (*CallGraph, error) {
 		graph.Nodes[qn] = node
 		graph.IDIndex[f.ID] = node
 		graph.plainNameIndex[f.Name] = append(graph.plainNameIndex[f.Name], node)
+		// 同包索引：只有有包名的函数才加入
+		if f.PackageName != "" {
+			pkgFuncIndex[pkgKey{f.PackageName, f.Name}] = node
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -93,7 +100,7 @@ func (a *Analyzer) BuildCallGraph(sessionID int64) (*CallGraph, error) {
 		for _, dep := range deps {
 			node.Callees = append(node.Callees, dep)
 
-			// 尝试匹配限定名：如果调用方有包名，尝试 pkg.dep
+			// 策略 1：精确匹配限定名 pkg.dep
 			matched := false
 			if node.Function.PackageName != "" {
 				qd := fmt.Sprintf("%s.%s", node.Function.PackageName, dep)
@@ -103,13 +110,22 @@ func (a *Analyzer) BuildCallGraph(sessionID int64) (*CallGraph, error) {
 				}
 			}
 
-			// 回退：按普通名匹配（处理跨包调用）
+			// 策略 2：同包匹配 — 调用方包内找同名函数
+			if !matched && node.Function.PackageName != "" {
+				if calleeNode, ok := pkgFuncIndex[pkgKey{node.Function.PackageName, dep}]; ok {
+					calleeNode.Callers = append(calleeNode.Callers, node.Qualified)
+					matched = true
+				}
+			}
+
+			// 策略 3：全局回退 — 仅当唯一候选时才匹配，有歧义则跳过
 			if !matched {
 				if candidates, ok := graph.plainNameIndex[dep]; ok {
-					for _, calleeNode := range candidates {
-						calleeNode.Callers = append(calleeNode.Callers, node.Qualified)
+					if len(candidates) == 1 {
+						candidates[0].Callers = append(candidates[0].Callers, node.Qualified)
+						matched = true
 					}
-					matched = true
+					// len(candidates) > 1: 多个包都有同名函数，无法确定是哪个，跳过
 				}
 			}
 		}

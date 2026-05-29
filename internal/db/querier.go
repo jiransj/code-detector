@@ -367,12 +367,14 @@ type DepStat struct {
 }
 
 func (s *Store) QueryDepStats() ([]*DepStat, error) {
+	// 按函数名聚合：callee_name 是纯文本，同名函数合并统计
 	rows, err := s.DB.Query(
-		`SELECT f.id, f.name,
+		`SELECT f.name,
 		        (SELECT COUNT(DISTINCT d2.caller_id) FROM function_deps d2 WHERE d2.callee_name = f.name) AS caller_cnt,
-		        (SELECT COUNT(*) FROM function_deps d3 WHERE d3.caller_id = f.id) AS callee_cnt,
-		        f.call_count
+		        (SELECT COUNT(DISTINCT d3.callee_name) FROM function_deps d3 WHERE d3.caller_id IN (SELECT id FROM functions WHERE name = f.name)) AS callee_cnt,
+		        MAX(f.call_count) AS call_count
 		 FROM functions f
+		 GROUP BY f.name
 		 ORDER BY caller_cnt DESC`,
 	)
 	if err != nil {
@@ -383,8 +385,7 @@ func (s *Store) QueryDepStats() ([]*DepStat, error) {
 	var stats []*DepStat
 	for rows.Next() {
 		ds := &DepStat{}
-		var id int64
-		if err := rows.Scan(&id, &ds.FuncName, &ds.CallerCount, &ds.CalleeCount, &ds.TotalCallCount); err != nil {
+		if err := rows.Scan(&ds.FuncName, &ds.CallerCount, &ds.CalleeCount, &ds.TotalCallCount); err != nil {
 			return nil, err
 		}
 		stats = append(stats, ds)
