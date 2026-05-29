@@ -246,10 +246,35 @@ func makePythonCommentMask(lines []string) []bool {
 	return mask
 }
 
-// makePythonStringMask 标记多行字符串中的行（已由 makePythonCommentMask 处理）
+// makePythonStringMask 标记 Python 单行字符串（单引号/双引号内的行）
+// 注意：三引号字符串已在 makePythonCommentMask 中处理，
+// 但单行 "..." 和 '...' 中的函数调用（如 f"{x}"）需要被屏蔽，避免假阳性。
 func makePythonStringMask(lines []string) []bool {
-	// Python 中三引号已在 comment mask 中处理
-	return make([]bool, len(lines))
+	mask := make([]bool, len(lines))
+	for i, line := range lines {
+		inDouble := false
+		inSingle := false
+		escaped := false
+		for _, ch := range line {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if ch == '\\' {
+				escaped = true
+				continue
+			}
+			if ch == '"' && !inSingle {
+				inDouble = !inDouble
+			} else if ch == '\'' && !inDouble {
+				inSingle = !inSingle
+			}
+		}
+		// 如果行结束时空引号未闭合，说明这是跨行字符串（Python 中很少见，
+		// 多行字符串通常用三引号），按未闭合标记
+		mask[i] = inDouble || inSingle
+	}
+	return mask
 }
 
 // extractPythonCalls 提取 Python 函数调用（委托给通用提取器）

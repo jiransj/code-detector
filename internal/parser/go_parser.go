@@ -133,7 +133,7 @@ func (p *GoParser) Parse(filePath string, content []byte) ([]*model.Function, er
 			continue
 		}
 
-		matches := goFuncRegex.FindStringSubmatch(line)
+			matches := goFuncRegex.FindStringSubmatch(line)
 		if matches == nil {
 			continue
 		}
@@ -169,14 +169,15 @@ func (p *GoParser) Parse(filePath string, content []byte) ([]*model.Function, er
 		braceLine := fs.lineIdx
 		funcIdxInLine := fs.matchStart - fl.LineOffset(braceLine)
 		afterFunc := lines[braceLine][funcIdxInLine:]
-		braceIdxInLine := strings.Index(afterFunc, "{")
+		// 在 afterFunc 中找不在字符串内的 {，防止字符串字面量中的 { 被误匹配
+		braceIdxInLine := findBraceInLine(afterFunc)
 		if braceIdxInLine < 0 {
 			// 当前行函数名后没找到 "{", 可能在后续行
 			for j := braceLine + 1; j < len(lines); j++ {
 				if commentMask[j] || stringMask[j] {
 					continue
 				}
-				if idx := strings.Index(lines[j], "{"); idx >= 0 {
+				if idx := findBraceInLine(lines[j]); idx >= 0 {
 					braceLine = j
 					braceIdxInLine = idx
 					break
@@ -427,12 +428,14 @@ func makeCommentMask(lines []string, singleComments []string, blockComments [][2
 }
 
 // makeStringMask 标记跨行字符串字面量
+// Go 语义：单引号(')和双引号(")不能跨行（编译错误），
+// 但反引号(`)原始字符串可以跨行，因此只有 inBacktick 需要跨行持久化。
 func makeStringMask(lines []string) []bool {
 	mask := make([]bool, len(lines))
+	inBacktick := false
 	for i, line := range lines {
 		inDouble := false
 		inSingle := false
-		inBacktick := false
 		escaped := false
 
 		for _, ch := range line {
@@ -455,6 +458,42 @@ func makeStringMask(lines []string) []bool {
 		mask[i] = inDouble || inSingle || inBacktick
 	}
 	return mask
+}
+
+// findBraceInLine 在 line 中查找第一个不在字符串字面量内的 '{'
+// 避免字符串中的 { 被误认为函数体起始（如 var x = "{"; function foo() { ... }）
+func findBraceInLine(line string) int {
+	inSingle := false
+	inDouble := false
+	inBacktick := false
+	escaped := false
+	for i := 0; i < len(line); i++ {
+		ch := line[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if ch == '\\' && (inDouble || inSingle) {
+			escaped = true
+			continue
+		}
+		if ch == '"' && !inSingle && !inBacktick {
+			inDouble = !inDouble
+			continue
+		}
+		if ch == '\'' && !inDouble && !inBacktick {
+			inSingle = !inSingle
+			continue
+		}
+		if ch == '`' && !inDouble && !inSingle {
+			inBacktick = !inBacktick
+			continue
+		}
+		if !inDouble && !inSingle && !inBacktick && ch == '{' {
+			return i
+		}
+	}
+	return -1
 }
 
 func hasSingleCommentPrefix(s string, singleComments []string, offset int) bool {
@@ -522,6 +561,29 @@ var goKeywords = map[string]bool{	"if": true, "for": true, "switch": true, "sel
 	"Abs": true, "Ceil": true, "Floor": true, "Round": true, "Max": true, "Min": true,
 	"Pow": true, "Sqrt": true, "Sin": true, "Cos": true, "Tan": true, "Log": true, "Exp": true, "Mod": true,
 	"Fatal": true, "Fatalf": true, "Fatalln": true,
+	// database/sql
+	"Begin": true, "Commit": true, "Conn": true, "Exec": true, "ExecContext": true,
+	"LastInsertId": true, "Prepare": true, "Query": true, "QueryRow": true, "Rollback": true,
+	// os / filepath
+	"Dir": true, "Executable": true, "Ext": true, "IsDir": true, "IsNotExist": true,
+	"ModTime": true, "Name": true, "SameFile": true, "Size": true, "Walk": true,
+	// regexp
+	"Compile": true, "FindAllStringSubmatch": true, "FindStringSubmatch": true,
+	"FindStringSubmatchIndex": true, "MustCompile": true, "SubexpIndex": true,
+	// strconv / fmt / bytes
+	"BoolVar": true, "Int64Var": true, "IntVar": true, "NArg": true, "StringVar": true,
+	"Bytes": true, "IndexByte": true, "WriteByte": true, "Print": true, "Println": true,
+	"Arg": true,
+	// time
+	"Format": true, "Milliseconds": true, "Unix": true,
+	// unicode
+	"IsLetter": true, "IsUpper": true,
+	// crypto / encoding
+	"Sum256": true, "Valid": true,
+	// sync / context
+	"Rel": true,
+	// sort / other std
+	"Err": true, "Next": true, "NumCPU": true,
 	"Background": true, "TODO": true,
 	"WithCancel": true, "WithDeadline": true, "WithTimeout": true, "WithValue": true,
 }

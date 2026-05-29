@@ -105,13 +105,13 @@ func (p *JSParser) Parse(filePath string, content []byte) ([]*model.Function, er
 	for _, fs := range starts {
 		offset := fl.LineOffset(fs.lineIdx)
 		line := lines[fs.lineIdx]
-		braceIdx := strings.Index(line, "{")
+		braceIdx := findBraceInLine(line)
 		if braceIdx < 0 {
 			for j := fs.lineIdx + 1; j < len(lines); j++ {
 				if commentMask[j] || stringMask[j] {
 					continue
 				}
-				if idx := strings.Index(lines[j], "{"); idx >= 0 {
+				if idx := findBraceInLine(lines[j]); idx >= 0 {
 					braceIdx = idx
 					offset = fl.LineOffset(j) + idx
 					break
