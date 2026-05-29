@@ -276,7 +276,7 @@ func (s *Scanner) parseConcurrently(files []string, absRoot string, sessionID in
 	return results
 }
 
-const batchFlushThreshold = 30
+const batchFlushThreshold = 5000
 
 // writeResults 从 channel 消费解析结果，分批流水线写入数据库（与解析重叠执行）
 func (s *Scanner) writeResults(resultsCh <-chan parseResult, sessionID int64, start time.Time, fileCount int, result *model.ScanResult) error {
