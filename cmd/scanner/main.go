@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -25,6 +26,19 @@ var cleanup func()
 
 // noWait 为 true 时 waitForExit 跳过 stdin 等待（查询模式/管道模式）
 var noWait bool
+
+// outputFormat 输出格式: "text" 或 "json"
+var outputFormat = "text"
+
+// jsonOut 以 JSON 格式输出任意值到标准输出
+func jsonOut(v interface{}) {
+	data, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "JSON 序列化错误: %v\n", err)
+		return
+	}
+	fmt.Println(string(data))
+}
 
 // waitForExit 在程序退出前等待用户按键（兼容命令行、双击启动、管道输入）
 func waitForExit() {
@@ -435,6 +449,7 @@ func parseFlags() (dbPath string, cfgPath string, langs string, skipDirs string,
 	flag.BoolVar(&buildGraph, "graph", false, "扫描完成后构建调用图并输出统计")
 	flag.BoolVar(&incremental, "incremental", false, "增量扫描：仅重新解析 mtime 变更的文件")
 	flag.StringVar(&queryMode, "query", "", "查询模式：读取已有数据库而不扫描")
+	flag.StringVar(&outputFormat, "format", "text", "输出格式: text (默认) 或 json")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, `code-detector v%s — 多编程语言函数扫描工具
 
@@ -452,6 +467,7 @@ func parseFlags() (dbPath string, cfgPath string, langs string, skipDirs string,
   -verbose         输出详细日志
   -graph           扫描完成后构建调用图并输出统计
   -incremental     增量扫描：仅重新解析 mtime 变更的文件
+  -format <格式>   输出格式: text (默认) 或 json
   -query <模式>    查询模式：读取已有数据库不扫描
                     summary     显示数据库概要
                     functions   列出所有函数
@@ -555,6 +571,10 @@ func runQueryMode(dbPath string, queryMode string) {
 // printQuerySummary 打印数据库概要
 func printQuerySummary(store *db.Store) {
 	summary, err := store.QuerySummary()
+	if outputFormat == "json" {
+		jsonOut(summary)
+		return
+	}
 	if err != nil {
 		fatal("查询摘要失败: %v", err)
 	}
@@ -600,11 +620,16 @@ func printQuerySummary(store *db.Store) {
 	}
 }
 
-// printQueryFunctions 列出所有函数
+// printQueryFunctions 列出所有函数（不含 body）
 func printQueryFunctions(store *db.Store) {
 	funcs, err := store.QueryAllFunctions()
 	if err != nil {
 		fatal("查询函数列表失败: %v", err)
+	}
+
+	if outputFormat == "json" {
+		jsonOut(funcs)
+		return
 	}
 
 	fmt.Printf("共 %d 个函数:\n\n", len(funcs))
@@ -628,18 +653,79 @@ func printQueryFunctions(store *db.Store) {
 	}
 }
 
-// printQueryFuncDetail 查看指定函数的详细信息
-func printQueryFuncDetail(store *db.Store, name string) {
-	funcs, err := store.QueryFuncByName(name)
-	if err != nil {
-		fatal("查询函数失败: %v", err)
+// printQueryFuncDetail 查看指定函数的详细信息（支持逗号分隔批量查询）
+func printQueryFuncDetail(store *db.Store, param string) {
+	// 支持批量: 逗号分隔多个函数名
+	names := strings.Split(param, ",")
+	var allFuncs []*model.Function
+	for _, n := range names {
+		n = strings.TrimSpace(n)
+		if n == "" {
+			continue
+		}
+		funcs, err := store.QueryFuncByName(n)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "查询函数 '%s' 失败: %v\n", n, err)
+			continue
+		}
+		if len(funcs) == 0 {
+			fmt.Fprintf(os.Stderr, "未找到名称包含 '%s' 的函数\n", n)
+			continue
+		}
+		allFuncs = append(allFuncs, funcs...)
 	}
-	if len(funcs) == 0 {
-		fmt.Printf("未找到名称包含 '%s' 的函数\n", name)
+	if len(allFuncs) == 0 {
 		return
 	}
 
-	for _, f := range funcs {
+	if outputFormat == "json" {
+		type FuncJSON struct {
+			ID           int64  `json:"id"`
+			Name         string `json:"name"`
+			PackageName  string `json:"package_name,omitempty"`
+			Language     string `json:"language"`
+			FilePath     string `json:"file_path"`
+			LineStart    int    `json:"line_start"`
+			LineEnd      int    `json:"line_end"`
+			LineCount    int    `json:"line_count"`
+			CallCount    int    `json:"call_count"`
+			NestingDepth int   `json:"nesting_depth"`
+			BodyPreview  string `json:"body_preview,omitempty"`
+			Dependencies []string `json:"dependencies,omitempty"`
+		}
+		var result []FuncJSON
+		for _, f := range allFuncs {
+			bodyPreview := ""
+			if f.Body != "" {
+				lines := strings.Split(f.Body, "\n")
+				const maxPreview = 10
+				show := len(lines)
+				if show > maxPreview {
+					show = maxPreview
+				}
+				bodyPreview = strings.Join(lines[:show], "\n")
+			}
+			r := FuncJSON{
+				ID:           f.ID,
+				Name:         f.Name,
+				PackageName:  f.PackageName,
+				Language:     f.Language,
+				FilePath:     f.FilePath,
+				LineStart:    f.LineStart,
+				LineEnd:      f.LineEnd,
+				LineCount:    f.LineEnd - f.LineStart + 1,
+				CallCount:    f.CallCount,
+				NestingDepth: f.NestingDepth,
+				BodyPreview:  bodyPreview,
+				Dependencies: f.Dependencies,
+			}
+			result = append(result, r)
+		}
+		jsonOut(result)
+		return
+	}
+
+	for _, f := range allFuncs {
 		fmt.Println("═══════════════════════════════════════════")
 		fmt.Printf("  函数名:     %s\n", f.Name)
 		fmt.Printf("  包:         %s\n", f.PackageName)
@@ -699,6 +785,10 @@ func printQueryVars(store *db.Store) {
 	if err != nil {
 		fatal("查询全局变量失败: %v", err)
 	}
+	if outputFormat == "json" {
+		jsonOut(vars)
+		return
+	}
 	fmt.Printf("共 %d 个全局变量:\n\n", len(vars))
 	for _, v := range vars {
 		constStr := "var"
@@ -719,6 +809,10 @@ func printQueryDeps(store *db.Store) {
 	stats, err := store.QueryDepStats()
 	if err != nil {
 		fatal("查询调用统计失败: %v", err)
+	}
+	if outputFormat == "json" {
+		jsonOut(stats)
+		return
 	}
 
 	fmt.Println("╔══════════════════════════════════════════╗")
@@ -771,6 +865,10 @@ func printQueryCallers(store *db.Store, funcName string) {
 	if err != nil {
 		fatal("查询调用方失败: %v", err)
 	}
+	if outputFormat == "json" {
+		jsonOut(callers)
+		return
+	}
 
 	if len(callers) == 0 {
 		fmt.Printf("没有函数调用 '%s'\n", funcName)
@@ -789,6 +887,10 @@ func printQueryDead(store *db.Store) {
 	if err != nil {
 		fatal("查询死代码失败: %v", err)
 	}
+	if outputFormat == "json" {
+		jsonOut(funcs)
+		return
+	}
 
 	fmt.Printf("未被调用的函数 (共 %d 个):\n\n", len(funcs))
 	for _, f := range funcs {
@@ -805,6 +907,10 @@ func printQueryMissing(store *db.Store) {
 	missing, err := store.QueryMissingDeps()
 	if err != nil {
 		fatal("查询缺失依赖失败: %v", err)
+	}
+	if outputFormat == "json" {
+		jsonOut(missing)
+		return
 	}
 
 	if len(missing) == 0 {
@@ -824,6 +930,10 @@ func printQueryTop(store *db.Store, n int) {
 	if err != nil {
 		fatal("查询最大函数失败: %v", err)
 	}
+	if outputFormat == "json" {
+		jsonOut(funcs)
+		return
+	}
 
 	fmt.Printf("行数最多的 %d 个函数:\n\n", len(funcs))
 	for i, f := range funcs {
@@ -837,6 +947,10 @@ func printQueryDeep(store *db.Store, threshold int) {
 	funcs, err := store.QueryDeepNesting(threshold)
 	if err != nil {
 		fatal("查询深度嵌套函数失败: %v", err)
+	}
+	if outputFormat == "json" {
+		jsonOut(funcs)
+		return
 	}
 
 	if len(funcs) == 0 {
