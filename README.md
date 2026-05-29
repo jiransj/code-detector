@@ -6,6 +6,13 @@
   <a href="README_EN.md">🇬🇧 English</a>
 </p>
 
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
+  <img src="https://img.shields.io/badge/version-v0.5-brightgreen.svg" alt="Version v0.5">
+  <img src="https://img.shields.io/badge/go-1.26-blue.svg" alt="Go 1.26">
+  <img src="https://img.shields.io/badge/platform-windows%20%7C%20linux-lightgrey.svg" alt="Platform">
+</p>
+
 ---
 
 # code-detector
@@ -259,3 +266,9 @@ make build
 ```
 
 构建产物为 `code-detector.exe`。
+
+---
+
+## 许可证
+
+本项目基于 [MIT 许可证](LICENSE) 开源。
