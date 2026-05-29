@@ -684,14 +684,25 @@ func filterCPPKeywords(deps []string) []string {
 }
 
 // makePreprocessorMask 标记 C/C++ 预处理指令行和死代码块
-// 1. #if 0 ... #endif — 条件编译死代码
-// 2. #define 宏定义及其续行体 — 宏展开不在语义层面可见
-// 3. 其他 # 指令行直接跳过（由调用方处理）
+// makePreprocessorMask 标记 C/C++ 预处理指令行和死代码块
+//
+// 处理策略:
+//   - #if 0 ... #endif — 条件编译死代码（精确匹配，支持 #if 0 /* comment */）
+//   - #define 宏定义及其续行体
+//   - 其他 # 指令行（#include, #ifdef, #ifndef, #else, #elif, #pragma）
+//
+// 注意: #ifdef MACRO / #ifndef MACRO 无法判断宏是否已定义，仅标记指令行本身
+//       不跳过其条件块内的代码（保守策略：不误删有效代码）
 func makePreprocessorMask(lines []string) []bool {
 	mask := make([]bool, len(lines))
 	inIfZero := false    // 在 #if 0 ... #endif 块内
 	inDefine := false    // 在 #define 续行内
 	ifZeroNest := 0      // 嵌套 #if/#ifdef/#ifndef 计数
+
+	// 正则匹配 #if 0 [可选注释] — 处理精确的 #if 0 判断
+	// 匹配如: #if 0, #if 0 /* comment */, #if 0 // comment
+	// 不匹配: #if VERSION > 100, #if defined(MACRO_10)
+	ifZeroRegex := regexp.MustCompile(`^#\s*if\s+0(\s*|/\*.*?\*/\s*|//.*)$`)
 
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
@@ -723,23 +734,11 @@ func makePreprocessorMask(lines []string) []bool {
 
 		// 检测 # 预处理指令
 		if strings.HasPrefix(trimmed, "#") {
-			if trimmed == "#if 0" {
-				// #if 0 — 死代码块开始
+			if ifZeroRegex.MatchString(trimmed) {
+				// #if 0 — 死代码块开始（精确匹配，避免误判 #if VERSION > 100）
 				inIfZero = true
 				mask[i] = true
 				ifZeroNest = 0
-			} else if strings.HasPrefix(trimmed, "#if ") && strings.Contains(trimmed, "0") {
-				// 可能还有其他 #if 0 变体
-				parts := strings.Fields(trimmed)
-				for _, p := range parts {
-					if p == "0" {
-						inIfZero = true
-						mask[i] = true
-						ifZeroNest = 0
-						break
-					}
-				}
-				mask[i] = true
 			} else if strings.HasPrefix(trimmed, "#define") {
 				// #define — 标记此行及所有续行
 				mask[i] = true
