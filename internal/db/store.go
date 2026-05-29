@@ -573,7 +573,7 @@ func (s *Store) Checkpoint() {
 	}
 	defer conn.Close()
 
-	// TRUNCATE 模式：checkpoint 后截断 WAL 文件并移除 -shm
+	// TRUNCATE 模式：checkpoint 后截断 WAL 文件（归零）；-shm 文件在 Close() 中切换 DELETE 模式时移除
 	var result int
 	if err := conn.QueryRowContext(context.Background(),
 		"PRAGMA wal_checkpoint(TRUNCATE)").Scan(&result); err != nil {
@@ -587,8 +587,18 @@ func (s *Store) Checkpoint() {
 	}
 }
 
-// Close 关闭数据库连接（先 checkpoint 确保 WAL 回写）
+// Close 关闭数据库连接
+// 1) checkpoint 确保 WAL 回写
+// 2) 切换为 DELETE journal 模式，强制 SQLite 删除 -wal 和 -shm 文件
 func (s *Store) Close() error {
 	s.Checkpoint()
+
+	// 切换回 DELETE 模式：SQLite 会自动完成 final checkpoint 并移除 -wal/-shm 文件
+	conn, err := s.DB.Conn(context.Background())
+	if err == nil {
+		conn.ExecContext(context.Background(), "PRAGMA journal_mode=DELETE")
+		conn.Close()
+	}
+
 	return s.DB.Close()
 }
