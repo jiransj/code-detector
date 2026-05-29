@@ -89,6 +89,85 @@ func inStringLike(inDouble, inSingle, inBacktick, inBlockComment bool) bool {
 	return inDouble || inSingle || inBacktick || inBlockComment
 }
 
+// stripperState 跨行字符串/注释状态，用于 stripLine 跨行追踪块注释
+type stripperState struct {
+	InBlockComment bool
+}
+
+// stripLine 脱敏单行：用空格替换字符串和注释内容，保留非字符串部分对齐
+// 通过 state 追踪跨行块注释 /* */ 状态
+func stripLine(line string, state *stripperState) string {
+	inDouble := false
+	inSingle := false
+	inBacktick := false
+	inBlockComment := state.InBlockComment
+	escaped := false
+	var buf bytes.Buffer
+	buf.Grow(len(line))
+	for i := 0; i < len(line); i++ {
+		ch := line[i]
+		if escaped {
+			escaped = false
+			buf.WriteByte(' ')
+			continue
+		}
+		if ch == '\\' && (inDouble || inSingle) {
+			escaped = true
+			buf.WriteByte(' ')
+			continue
+		}
+
+		if !inSingle && !inDouble && !inBacktick && !inBlockComment {
+			if ch == '"' {
+				inDouble = true
+				buf.WriteByte(' ')
+				continue
+			}
+			if ch == '\'' {
+				inSingle = true
+				buf.WriteByte(' ')
+				continue
+			}
+			if ch == '`' {
+				inBacktick = true
+				buf.WriteByte(' ')
+				continue
+			}
+			if ch == '/' && i+1 < len(line) && line[i+1] == '/' {
+				// 单行注释 // — 忽略剩余部分
+				state.InBlockComment = false
+				return strings.TrimRight(buf.String(), " ")
+			}
+			if ch == '/' && i+1 < len(line) && line[i+1] == '*' {
+				inBlockComment = true
+				buf.WriteByte(' ')
+				i++
+				continue
+			}
+		}
+
+		if inStringLike(inDouble, inSingle, inBacktick, inBlockComment) {
+			buf.WriteByte(' ')
+		} else {
+			buf.WriteByte(ch)
+		}
+
+		if inDouble && ch == '"' && !escaped {
+			inDouble = false
+		} else if inSingle && ch == '\'' && !escaped {
+			inSingle = false
+		} else if inBacktick && ch == '`' {
+			inBacktick = false
+		} else if inBlockComment && ch == '*' && i+1 < len(line) && line[i+1] == '/' {
+			inBlockComment = false
+			buf.WriteByte(' ')
+			i++
+		}
+	}
+	state.InBlockComment = inBlockComment
+	return strings.TrimRight(buf.String(), " ")
+}
+
 // extractCalls 在函数体内提取函数调用（返回去重的被调用函数名列表）
 func extractCalls(body string, callRegex *regexp.Regexp, stringMask, commentMask []bool, startLine, endLine int) []string {
 	stats := extractCallStats(body, callRegex, stringMask, commentMask, startLine, endLine, isKeyword, isAllUpper)
@@ -106,13 +185,9 @@ func extractCallStats(body string, callRegex *regexp.Regexp,
 	maxNesting := 0
 	currentNesting := 0
 
-	// 跨行状态：字符串/注释跨行持续追踪（假阳性修复）
-	inBlockComment := false
-	inRawString := false
-	inDoubleString := false
-	inSingleString := false
+	var ss stripperState
 
-	// 逐字符扫描 body，按 \n 切分行，避免 strings.Split 分配
+	// 逐行扫描 body
 	lineIdx := 0
 	lineStart := 0
 	for pos := 0; pos <= len(body); pos++ {
@@ -124,72 +199,18 @@ func extractCallStats(body string, callRegex *regexp.Regexp,
 		globalLine := startLine + lineIdx
 		lineIdx++
 
+		// 用全局行 mask 快速跳过整行
 		commentMasked := globalLine < len(commentMask) && commentMask[globalLine]
 		stringMasked := globalLine < len(stringMask) && stringMask[globalLine]
 		if commentMasked || stringMasked {
 			continue
 		}
 
-		// 追踪括号嵌套深度（跨行），区分字符串/注释内的括号（假阳性修复）
-		escaped := false
-		lineComment := false
-		for j, ch := range line {
-			if escaped {
-				escaped = false
-				continue
-			}
-			if ch == '\\' && (inDoubleString || inSingleString) {
-				escaped = true
-				continue
-			}
+		// stripLine 一次性处理字符串/注释脱敏，同时追踪跨行块注释状态
+		cleanLine := stripLine(line, &ss)
 
-			// 行注释 //
-			if !inBlockComment && !inDoubleString && !inSingleString && !inRawString && !lineComment {
-				if ch == '/' && j+1 < len(line) && line[j+1] == '/' {
-					lineComment = true
-					break
-				}
-				if ch == '/' && j+1 < len(line) && line[j+1] == '*' {
-					inBlockComment = true
-					continue
-				}
-			}
-			if lineComment {
-				break
-			}
-
-			// 块注释
-			if inBlockComment {
-				if ch == '*' && j+1 < len(line) && line[j+1] == '/' {
-					inBlockComment = false
-				}
-				continue
-			}
-
-			// 字符串边界
-			if !inSingleString && !inDoubleString && !inRawString {
-				if ch == '"' {
-					inDoubleString = true
-					continue
-				}
-				if ch == '\'' {
-					inSingleString = true
-					continue
-				}
-				if ch == '`' {
-					inRawString = true
-					continue
-				}
-			} else if inRawString {
-				if ch == '`' {
-					inRawString = false
-				}
-				continue
-			} else if inDoubleString || inSingleString {
-				continue
-			}
-
-			// 只在非字符串、非注释中追踪括号
+		// 在脱敏后的行上追踪括号嵌套（字符串/注释内的括号已被替换为空格）
+		for _, ch := range cleanLine {
 			if ch == '(' {
 				currentNesting++
 				if currentNesting > maxNesting {
@@ -202,8 +223,7 @@ func extractCallStats(body string, callRegex *regexp.Regexp,
 			}
 		}
 
-		// 匹配函数调用（cleanLine 已剔除字符串/注释内的文本，防止假阳性）
-		cleanLine := stripStringContent(line)
+		// 在脱敏行上匹配函数调用
 		matches := callRegex.FindAllStringSubmatch(cleanLine, -1)
 		for _, m := range matches {
 			if len(m) >= 3 {
@@ -255,10 +275,7 @@ func extractCallStatsSimple(body string, callRegex *regexp.Regexp, skipFn func(s
 	maxNesting := 0
 	currentNesting := 0
 
-	inBlockComment := false
-	inRawString := false
-	inDoubleString := false
-	inSingleString := false
+	var ss stripperState
 	lineStart := 0
 	for pos := 0; pos <= len(body); pos++ {
 		if pos < len(body) && body[pos] != '\n' {
@@ -267,62 +284,11 @@ func extractCallStatsSimple(body string, callRegex *regexp.Regexp, skipFn func(s
 		line := body[lineStart:pos]
 		lineStart = pos + 1
 
-		// 追踪括号嵌套深度（跨行），区分字符串/注释内的括号（假阳性修复）
-		escaped := false
-		lineComment := false
-		for j, ch := range line {
-			if escaped {
-				escaped = false
-				continue
-			}
-			if ch == '\\' && (inDoubleString || inSingleString) {
-				escaped = true
-				continue
-			}
+		// stripLine 一次性脱敏并追踪跨行块注释
+		cleanLine := stripLine(line, &ss)
 
-			if !inBlockComment && !inDoubleString && !inSingleString && !inRawString && !lineComment {
-				if ch == '/' && j+1 < len(line) && line[j+1] == '/' {
-					lineComment = true
-					break
-				}
-				if ch == '/' && j+1 < len(line) && line[j+1] == '*' {
-					inBlockComment = true
-					continue
-				}
-			}
-			if lineComment {
-				break
-			}
-
-			if inBlockComment {
-				if ch == '*' && j+1 < len(line) && line[j+1] == '/' {
-					inBlockComment = false
-				}
-				continue
-			}
-
-			if !inSingleString && !inDoubleString && !inRawString {
-				if ch == '"' {
-					inDoubleString = true
-					continue
-				}
-				if ch == '\'' {
-					inSingleString = true
-					continue
-				}
-				if ch == '`' {
-					inRawString = true
-					continue
-				}
-			} else if inRawString {
-				if ch == '`' {
-					inRawString = false
-				}
-				continue
-			} else if inDoubleString || inSingleString {
-				continue
-			}
-
+		// 在脱敏行上追踪括号嵌套
+		for _, ch := range cleanLine {
 			if ch == '(' {
 				currentNesting++
 				if currentNesting > maxNesting {
@@ -335,8 +301,7 @@ func extractCallStatsSimple(body string, callRegex *regexp.Regexp, skipFn func(s
 			}
 		}
 
-		// 匹配函数调用（cleanLine 已剔除字符串/注释内的文本，防止假阳性）
-		cleanLine := stripStringContent(line)
+		// 在脱敏行上匹配函数调用
 		matches := callRegex.FindAllStringSubmatch(cleanLine, -1)
 		for _, m := range matches {
 			if len(m) >= 3 {
