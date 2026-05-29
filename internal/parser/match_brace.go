@@ -27,6 +27,35 @@ func matchBrace(text string, openPos int) (int, error) {
 			continue
 		}
 
+		// C++ 原始字符串字面量 R"delimiter(...)delimiter"
+		if !inRaw && !inSingle && !inDouble && ch == 'R' && i+1 < len(text) && text[i+1] == '"' {
+			// 提取分隔符: R"delimiter(
+			delimStart := i + 2
+			delimEnd := delimStart
+			for delimEnd < len(text) && text[delimEnd] != '(' {
+				delimEnd++
+			}
+			if delimEnd < len(text) && text[delimEnd] == '(' {
+				delim := text[delimStart:delimEnd]
+				// 跳过原始字符串体直到 )delimiter"
+				i = delimEnd + 1 // 跳过 '('
+				for i < len(text) {
+					if text[i] == ')' && i+1+len(delim) < len(text) &&
+						text[i+1:i+1+len(delim)] == delim &&
+						i+1+len(delim) < len(text) && text[i+1+len(delim)] == '"' {
+						i = i + 1 + len(delim) + 1 // 跳过 )delimiter"
+						break
+					}
+					i++
+				}
+				if i >= len(text) {
+					i = len(text) - 1
+				}
+				continue
+			}
+			// 不是有效的 R"( 语法，继续正常处理
+		}
+
 		// 处理字符串边界
 		if !inRaw && !inSingle && !inDouble {
 			if ch == '`' {
