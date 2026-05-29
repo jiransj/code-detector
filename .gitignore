@@ -9,9 +9,6 @@ build/
 *.exe
 *.test
 
-# Windows 构建脚本（已合并到 Makefile）
-build.bat
-
 # IDE
 .idea/
 .vscode/
