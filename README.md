@@ -1,3 +1,13 @@
+<p align="center">
+  <strong>🌐 语言 / Language</strong>
+  &nbsp;&nbsp;|&nbsp;&nbsp;
+  <strong>🇨🇳 中文</strong>
+  &nbsp;&nbsp;|&nbsp;&nbsp;
+  <a href="README_EN.md">🇬🇧 English</a>
+</p>
+
+---
+
 # code-detector
 
 **code-detector** 是一个以go语言编写，跨平台、多编程语言的函数扫描工具。它可以递归扫描指定项目目录，自动识别源文件中的函数/方法定义，记录其行号范围、函数体、调用依赖等信息，并将结果存入 SQLite 数据库以供后续分析。

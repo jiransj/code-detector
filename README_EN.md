@@ -1,3 +1,13 @@
+<p align="center">
+  <strong>🌐 Language / 语言</strong>
+  &nbsp;&nbsp;|&nbsp;&nbsp;
+  <a href="README.md">🇨🇳 中文</a>
+  &nbsp;&nbsp;|&nbsp;&nbsp;
+  <strong>🇬🇧 English</strong>
+</p>
+
+---
+
 # code-detector
 
 **code-detector** is a cross-platform, multi-language function scanner written in Go. It recursively scans a project directory, automatically identifies function/method definitions in source files, records their line ranges, function bodies, call dependencies, and stores the results in a SQLite database for further analysis.
