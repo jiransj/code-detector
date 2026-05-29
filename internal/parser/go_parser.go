@@ -194,7 +194,9 @@ func (p *GoParser) Parse(filePath string, content []byte) ([]*model.Function, er
 			bodyEnd = len(text)
 		}
 		if bodyEnd < bodyStart {
-			bodyEnd = bodyStart
+			// matchBrace 返回的 closeOffset 在 matchStart 之前，说明括号匹配失败
+			// 跳过此函数以避免空 body 入库或 panic
+			continue
 		}
 		body := text[bodyStart:bodyEnd]
 

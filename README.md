@@ -104,6 +104,14 @@ code-detector -incremental ./myproject
 code-detector -db ./output/my_scan.db -verbose ./myproject
 ```
 
+**调试模式（查看解析器跳过详情）：**
+
+```cmd
+code-detector -debug ./myproject
+```
+
+> `-debug` 模式会输出各语言解析器的内部调试信息（如括号匹配失败时跳过了哪个函数及其位置），便于排查解析器 bug。正常使用 `-verbose` 即可。
+
 ---
 
 ## 命令行选项
@@ -116,7 +124,8 @@ code-detector -db ./output/my_scan.db -verbose ./myproject
 | `-max-size <N>` | 单文件最大字节数（默认 1MB），超过此大小的文件将被跳过 |
 | `-skip-dirs <列表>` | 额外跳过的子目录名，逗号分隔（默认跳过 `.git`、`node_modules` 等） |
 | `-workers <N>` | 并发工作协程数（默认等于 CPU 逻辑核心数） |
-| `-verbose` | 输出详细日志，显示扫描进度和注册信息 |
+| `-verbose` | 输出详细日志，显示扫描进度、注册信息和解析器跳过记录 |
+| `-debug` | 等同于 `-verbose`，并输出各语言解析器的调试信息（如括号匹配失败时的跳过详情），用于报告解析器 bug |
 | `-graph` | 扫描完成后构建调用关系图并输出统计摘要 |
 | `-incremental` | 增量扫描模式：仅重新解析 mtime（修改时间）发生变化的文件 |
 | `-v` | 显示版本号 |

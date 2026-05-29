@@ -562,43 +562,17 @@ func (s *Store) ClearFileCache(sessionID int64) error {
 }
 
 // Checkpoint 将 WAL 内容回写到主数据库文件
-// 先关闭空闲连接避免池中旧连接阻止截断，再用专用连接执行
 func (s *Store) Checkpoint() {
-	// 关闭空闲连接，让 pinned connection 成为唯一活跃连接
-	s.DB.SetMaxIdleConns(0)
-
 	conn, err := s.DB.Conn(context.Background())
 	if err != nil {
 		return
 	}
 	defer conn.Close()
-
-	// TRUNCATE 模式：checkpoint 后截断 WAL 文件（归零）；-shm 文件在 Close() 中切换 DELETE 模式时移除
-	var result int
-	if err := conn.QueryRowContext(context.Background(),
-		"PRAGMA wal_checkpoint(TRUNCATE)").Scan(&result); err != nil {
-		return
-	}
-
-	// result: 0=完成并截断, 1=完成但未截断, 2=未运行
-	if result != 0 {
-		// 退化为 FULL checkpoint，至少保证数据回写
-		conn.ExecContext(context.Background(), "PRAGMA wal_checkpoint(FULL)")
-	}
+	conn.ExecContext(context.Background(), "PRAGMA wal_checkpoint(TRUNCATE)")
 }
 
 // Close 关闭数据库连接
-// 1) checkpoint 确保 WAL 回写
-// 2) 切换为 DELETE journal 模式，强制 SQLite 删除 -wal 和 -shm 文件
 func (s *Store) Close() error {
 	s.Checkpoint()
-
-	// 切换回 DELETE 模式：SQLite 会自动完成 final checkpoint 并移除 -wal/-shm 文件
-	conn, err := s.DB.Conn(context.Background())
-	if err == nil {
-		conn.ExecContext(context.Background(), "PRAGMA journal_mode=DELETE")
-		conn.Close()
-	}
-
 	return s.DB.Close()
 }

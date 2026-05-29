@@ -98,6 +98,14 @@ code-detector -graph ./myproject
 code-detector -incremental ./myproject
 ```
 
+**Debug mode (view parser skip details):**
+
+```cmd
+code-detector -debug ./myproject
+```
+
+> `-debug` outputs parser-level diagnostic info (e.g. which function was skipped due to brace mismatch and its location). Use `-verbose` for normal detailed output.
+
 **Specify output database path:**
 
 ```cmd
@@ -116,7 +124,8 @@ code-detector -db ./output/my_scan.db -verbose ./myproject
 | `-max-size <N>` | Maximum file size in bytes (default 1MB); files larger than this are skipped |
 | `-skip-dirs <list>` | Additional subdirectory names to skip, comma-separated (default skips `.git`, `node_modules`, etc.) |
 | `-workers <N>` | Number of concurrent worker goroutines (default equals CPU logical cores) |
-| `-verbose` | Enable verbose logging, showing scan progress and registration info |
+| `-verbose` | Enable verbose logging, showing scan progress, registration info, and parser skip records |
+| `-debug` | Same as `-verbose`, plus parser-level debug output (e.g. brace mismatch skip details). Use when reporting parser bugs |
 | `-graph` | Build a call graph after scanning and print a statistical summary |
 | `-incremental` | Incremental scan mode: only re-parse files whose mtime has changed |
 | `-v` | Show version number |

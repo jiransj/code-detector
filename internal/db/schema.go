@@ -84,9 +84,6 @@ func InitDB(dbPath string) (*sql.DB, error) {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
 
-	// 单一连接：避免连接池中多连接持有 WAL 引用导致 checkpoint 截断失败
-	db.SetMaxOpenConns(1)
-
 	// 启用 WAL 模式 — 写入性能好，支持并发读
 	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
 		log.Printf("warn: failed to set WAL mode: %v", err)
