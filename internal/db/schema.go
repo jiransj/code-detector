@@ -77,6 +77,29 @@ const (
 	);`
 )
 
+// columnExists 检查 SQLite 表中是否存在指定列（通过 PRAGMA table_info）
+func columnExists(db *sql.DB, tableName, columnName string) (bool, error) {
+	rows, err := db.Query("PRAGMA table_info(" + tableName + ")")
+	if err != nil {
+		return false, fmt.Errorf("pragma table_info(%s): %w", tableName, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull int
+		var dfltValue *string
+		var pk int
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dfltValue, &pk); err != nil {
+			return false, fmt.Errorf("scan pragma row: %w", err)
+		}
+		if name == columnName {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
 // InitDB 初始化数据库，创建所有表与索引
 func InitDB(dbPath string) (*sql.DB, error) {
 	db, err := sql.Open("sqlite", dbPath)
@@ -112,18 +135,31 @@ func InitDB(dbPath string) (*sql.DB, error) {
 		}
 	}
 
-	// 数据库迁移：为旧数据库补充新列
-	migrations := []string{
-		`ALTER TABLE functions ADD COLUMN package_name TEXT DEFAULT ''`,
-		`ALTER TABLE global_vars ADD COLUMN package_name TEXT DEFAULT ''`,
-		`ALTER TABLE global_vars ADD COLUMN visibility  TEXT DEFAULT ''`,
-		`ALTER TABLE scan_sessions ADD COLUMN var_count INTEGER DEFAULT 0`,
-		`ALTER TABLE functions ADD COLUMN call_count INTEGER DEFAULT 0`,
-		`ALTER TABLE functions ADD COLUMN nesting_depth INTEGER DEFAULT 0`,
+	// 数据库迁移：为旧数据库补充新列，仅当列不存在时执行
+	type migrationStep struct {
+		table  string
+		column string
+		stmt   string
 	}
-	for _, stmt := range migrations {
-		if _, err := db.Exec(stmt); err != nil {
-			log.Printf("migration (ignored if column exists): %v", err)
+	migrations := []migrationStep{
+		{"functions", "package_name", `ALTER TABLE functions ADD COLUMN package_name TEXT DEFAULT ''`},
+		{"global_vars", "package_name", `ALTER TABLE global_vars ADD COLUMN package_name TEXT DEFAULT ''`},
+		{"global_vars", "visibility", `ALTER TABLE global_vars ADD COLUMN visibility TEXT DEFAULT ''`},
+		{"scan_sessions", "var_count", `ALTER TABLE scan_sessions ADD COLUMN var_count INTEGER DEFAULT 0`},
+		{"functions", "call_count", `ALTER TABLE functions ADD COLUMN call_count INTEGER DEFAULT 0`},
+		{"functions", "nesting_depth", `ALTER TABLE functions ADD COLUMN nesting_depth INTEGER DEFAULT 0`},
+	}
+	for _, m := range migrations {
+		exists, err := columnExists(db, m.table, m.column)
+		if err != nil {
+			log.Printf("warn: check column %s.%s: %v", m.table, m.column, err)
+			continue
+		}
+		if exists {
+			continue
+		}
+		if _, err := db.Exec(m.stmt); err != nil {
+			log.Printf("warn: migration %s.%s: %v", m.table, m.column, err)
 		}
 	}
 
