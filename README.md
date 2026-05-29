@@ -132,14 +132,79 @@ code-detector -lang go,python -verbose D:\projects\myapp
 
 ## 输出说明
 
-扫描结果默认存储在 `scaned_db/scan_result.db`（SQLite 数据库），包含以下核心信息：
+扫描结果默认存储在 `scaned_db/scan_result.db`（SQLite 数据库），包含 **6 张表**，以下是完整的字段说明：
 
-- **函数名** 与方法签名
-- **所属语言** 与源文件路径
-- **起始行号** 与结束行号
-- **函数体源码**
-- **调用依赖**（调用了哪些其他函数）
-- **调用次数** 与 **嵌套深度**
+---
+
+### `scan_sessions` — 扫描会话表
+
+| DB 字段 | 中文说明 | 说明 |
+|---------|---------|------|
+| `id` | 会话 ID | 自增主键 |
+| `project_root` | 项目根目录 | 被扫描的项目根路径 |
+| `scan_time` | 扫描时间 | 扫描开始时间 |
+| `duration_ms` | 扫描耗时(毫秒) | 扫描总耗时 |
+| `file_count` | 扫描文件数 | 扫描的文件总数 |
+| `func_count` | 函数总数 | 发现的函数/方法总数 |
+| `var_count` | 全局变量总数 | 发现的全局变量/常量总数 |
+
+---
+
+### `functions` — 函数表
+
+| DB 字段 | 中文说明 | 说明 |
+|---------|---------|------|
+| `id` | 函数 ID | 自增主键 |
+| `session_id` | 所属会话 ID | 关联 `scan_sessions.id` |
+| `name` | 函数名 | 函数/方法名称 |
+| `package_name` | 包名/命名空间 | 所属包或命名空间（如 Go 的 package、Java 的 package、C# 的 namespace） |
+| `language` | 编程语言 | 语言内部名称（如 `go`、`python`、`java`） |
+| `file_path` | 文件路径 | 相对于项目根目录的路径 |
+| `line_start` | 起始行号 | 函数定义起始行 |
+| `line_end` | 结束行号 | 函数体结束行 |
+| `body` | 函数体源码 | 函数的完整源代码 |
+| `hash` | 内容哈希 | 函数内容 SHA256 哈希（前 16 字节，用于去重判断） |
+| `call_count` | 调用总次数 | 函数内部调用次数（含重复调用同一函数） |
+| `nesting_depth` | 嵌套深度 | 最大括号嵌套层级 |
+
+---
+
+### `function_deps` — 函数依赖关系表
+
+| DB 字段 | 中文说明 | 说明 |
+|---------|---------|------|
+| `id` | 依赖 ID | 自增主键 |
+| `caller_id` | 调用方函数 ID | 调用者函数 ID，关联 `functions.id` |
+| `callee_name` | 被调用函数名 | 被调用的函数名称 |
+
+---
+
+### `global_vars` — 全局变量表
+
+| DB 字段 | 中文说明 | 说明 |
+|---------|---------|------|
+| `id` | 变量 ID | 自增主键 |
+| `session_id` | 所属会话 ID | 关联 `scan_sessions.id` |
+| `name` | 变量名 | 变量/常量名称 |
+| `var_type` | 变量类型 | 数据类型（如 `int`、`string`、`[]byte`） |
+| `language` | 编程语言 | 语言内部名称 |
+| `package_name` | 包名/命名空间 | 所属包或命名空间 |
+| `visibility` | 可见性 | `public` 或 `private` |
+| `file_path` | 文件路径 | 相对于项目根目录的路径 |
+| `line_num` | 所在行号 | 变量定义的行号 |
+| `is_const` | 是否为常量 | `1` 表示常量，`0` 表示变量 |
+| `hash` | 内容哈希 | 变量内容哈希值（用于去重） |
+
+---
+
+### `file_cache` — 文件缓存表（增量扫描用）
+
+| DB 字段 | 中文说明 | 说明 |
+|---------|---------|------|
+| `file_path` | 文件路径 | 主键，文件完整路径 |
+| `mtime` | 修改时间戳 | 文件最后修改时间的 Unix 时间戳 |
+| `hash` | 文件哈希 | 文件内容的 SHA256 哈希值 |
+| `session_id` | 所属会话 ID | 关联 `scan_sessions.id` |
 
 启用 `-graph` 选项时，终端会输出调用关系统计摘要。
 
