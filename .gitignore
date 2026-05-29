@@ -10,6 +10,7 @@ build/
 
 # Release 二进制（通过 GitHub Releases 分发，不提交仓库）
 release_*/
+code-detector-v*/
 *.test
 
 # IDE
