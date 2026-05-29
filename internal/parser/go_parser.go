@@ -94,9 +94,9 @@ func makeGoFuncBodyMask(lines []string) []bool {
 	return mask
 }
 
-// goFuncRegex 匹配 Go 函数/方法定义
+// goFuncRegex 匹配 Go 函数/方法定义（支持泛型类型参数 [T any]）
 var goFuncRegex = regexp.MustCompile(
-	`(?:func\s+)(?:(?P<receiver>\s*\([^)]*\))\s+)?(?P<name>\w+)\s*\(`,
+	`(?:func\s+)(?:(?P<receiver>\s*\([^)]*\))\s+)?(?P<name>\w+)(?:\s*\[[^\[\]]*\])?\s*\(`,
 )
 
 // goCallRegex 匹配函数调用（含可选接收者前缀，双捕获组支持 qualified call 免过滤）
