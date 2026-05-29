@@ -1,6 +1,8 @@
 package parser
 
 import (
+	"fmt"
+	"os"
 	"regexp"
 	"strings"
 	"unicode"
@@ -162,23 +164,31 @@ func (p *GoParser) Parse(filePath string, content []byte) ([]*model.Function, er
 	allFuncs := make([]*model.Function, 0, len(starts))
 
 	for _, fs := range starts {
-		line := lines[fs.lineIdx]
-		braceIdx := strings.Index(line, "{")
-		if braceIdx < 0 {
-			for j := fs.lineIdx + 1; j < len(lines); j++ {
+		// 从函数匹配位置之后找 "{", 而不是整行的第一个 "{"
+		// 避免同一行上 struct/interface 等前置构造体的括号被误匹配
+		braceLine := fs.lineIdx
+		funcIdxInLine := fs.matchStart - fl.LineOffset(braceLine)
+		afterFunc := lines[braceLine][funcIdxInLine:]
+		braceIdxInLine := strings.Index(afterFunc, "{")
+		if braceIdxInLine < 0 {
+			// 当前行函数名后没找到 "{", 可能在后续行
+			for j := braceLine + 1; j < len(lines); j++ {
 				if commentMask[j] || stringMask[j] {
 					continue
 				}
 				if idx := strings.Index(lines[j], "{"); idx >= 0 {
-					braceIdx = idx
+					braceLine = j
+					braceIdxInLine = idx
 					break
 				}
 			}
-			if braceIdx < 0 {
+			if braceIdxInLine < 0 {
 				continue
 			}
+		} else {
+			braceIdxInLine += funcIdxInLine
 		}
-		offset := fl.LineOffset(fs.lineIdx) + braceIdx
+		offset := fl.LineOffset(braceLine) + braceIdxInLine
 
 		closeOffset, err := matchBrace(text, offset)
 		if err != nil {
@@ -196,6 +206,10 @@ func (p *GoParser) Parse(filePath string, content []byte) ([]*model.Function, er
 		if bodyEnd < bodyStart {
 			// matchBrace 返回的 closeOffset 在 matchStart 之前，说明括号匹配失败
 			// 跳过此函数以避免空 body 入库或 panic
+			if DebugMode {
+				fmt.Fprintf(os.Stderr, "debug: go_parser: brace mismatch at %s:%d~%d (matchStart=%d, closeOffset=%d), skipping func %s\n",
+					filePath, startLine+1, endLine+1, fs.matchStart, closeOffset, fs.name)
+			}
 			continue
 		}
 		body := text[bodyStart:bodyEnd]

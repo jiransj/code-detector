@@ -4,6 +4,9 @@ import (
 	"code-detector/internal/model"
 )
 
+// DebugMode 全局调试开关，开启时解析器会输出内部调试信息
+var DebugMode bool
+
 // Parser 接口：每种语言实现一个 Parser
 type Parser interface {
 	// Language 返回语言名称

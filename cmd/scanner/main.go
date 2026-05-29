@@ -372,7 +372,7 @@ func printCallGraph(buildGraph bool, store *db.Store, result *model.ScanResult) 
 func main() {
 	defer waitForExit()
 
-	dbPath, cfgPath, langs, skipDirs, verbose, showVer, workers, buildGraph, incremental, maxSize := parseFlags()
+	dbPath, cfgPath, langs, skipDirs, verbose, showVer, workers, buildGraph, incremental, maxSize, debug := parseFlags()
 	if showVer {
 		fmt.Printf("code-detector v%s\n", version)
 		return
@@ -384,6 +384,13 @@ func main() {
 	store := initDB(dbPath, verbose)
 	cleanup = func() { store.Close() }
 	defer cleanup()
+
+	if debug {
+		parser.DebugMode = true
+		if !verbose {
+			verbose = true
+		}
+	}
 	scan := initScanner(cfg, store, verbose, incremental, maxSize, workers, langs, skipDirs)
 
 	printBanner(projectRoot, dbPath, scan, cfg, verbose)
@@ -406,13 +413,14 @@ func main() {
 }
 
 // parseFlags 解析命令行参数
-func parseFlags() (dbPath string, cfgPath string, langs string, skipDirs string, verbose bool, showVer bool, workers int, buildGraph bool, incremental bool, maxSize int64) {
+func parseFlags() (dbPath string, cfgPath string, langs string, skipDirs string, verbose bool, showVer bool, workers int, buildGraph bool, incremental bool, maxSize int64, debug bool) {
 	flag.StringVar(&langs, "lang", "", "扫描语言，逗号分隔 (如 go,py,java)")
 	flag.StringVar(&dbPath, "db", "scaned_db/scan_result.db", "SQLite 数据库路径（默认 scaned_db/ 目录下）")
 	flag.StringVar(&cfgPath, "config", "config.yaml", "配置文件路径")
 	flag.Int64Var(&maxSize, "max-size", 1048576, "单文件最大字节数 (默认 1MB)")
 	flag.StringVar(&skipDirs, "skip-dirs", "", "额外跳过目录，逗号分隔")
 	flag.BoolVar(&verbose, "verbose", false, "输出详细日志")
+	flag.BoolVar(&debug, "debug", false, "调试模式（含解析器内部调试信息）")
 	flag.BoolVar(&showVer, "v", false, "显示版本号")
 	flag.IntVar(&workers, "workers", 0, "并发工作数 (默认 CPU 核数)")
 	flag.BoolVar(&buildGraph, "graph", false, "扫描完成后构建调用图并输出统计")
