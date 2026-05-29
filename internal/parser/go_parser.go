@@ -193,6 +193,9 @@ func (p *GoParser) Parse(filePath string, content []byte) ([]*model.Function, er
 		if bodyEnd > len(text) {
 			bodyEnd = len(text)
 		}
+		if bodyEnd < bodyStart {
+			bodyEnd = bodyStart
+		}
 		body := text[bodyStart:bodyEnd]
 
 		callStats := extractCallStats(body, goCallRegex, stringMask, commentMask, startLine, endLine, isKeyword, isAllUpper)
