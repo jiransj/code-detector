@@ -2,7 +2,6 @@ package parser
 
 import (
 	"regexp"
-	"strings"
 
 	"code-detector/internal/model"
 )
@@ -24,23 +23,29 @@ func extractCallStats(body string, callRegex *regexp.Regexp,
 	maxNesting := 0
 	currentNesting := 0
 
-	lines := strings.Split(body, "\n")
-
 	// 跨行状态：字符串/注释跨行持续追踪（假阳性修复）
 	inBlockComment := false
 	inRawString := false
 	inDoubleString := false
 	inSingleString := false
 
-	for i := 0; i < len(lines); i++ {
-		globalLine := startLine + i
+	// 逐字符扫描 body，按 \n 切分行，避免 strings.Split 分配
+	lineIdx := 0
+	lineStart := 0
+	for pos := 0; pos <= len(body); pos++ {
+		if pos < len(body) && body[pos] != '\n' {
+			continue
+		}
+		line := body[lineStart:pos]
+		lineStart = pos + 1
+		globalLine := startLine + lineIdx
+		lineIdx++
+
 		commentMasked := globalLine < len(commentMask) && commentMask[globalLine]
 		stringMasked := globalLine < len(stringMask) && stringMask[globalLine]
 		if commentMasked || stringMasked {
 			continue
 		}
-
-		line := lines[i]
 
 		// 追踪括号嵌套深度（跨行），区分字符串/注释内的括号（假阳性修复）
 		escaped := false
@@ -166,16 +171,17 @@ func extractCallStatsSimple(body string, callRegex *regexp.Regexp, skipFn func(s
 	maxNesting := 0
 	currentNesting := 0
 
-	lines := strings.Split(body, "\n")
 	inBlockComment := false
 	inRawString := false
 	inDoubleString := false
 	inSingleString := false
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
+	lineStart := 0
+	for pos := 0; pos <= len(body); pos++ {
+		if pos < len(body) && body[pos] != '\n' {
 			continue
 		}
+		line := body[lineStart:pos]
+		lineStart = pos + 1
 
 		// 追踪括号嵌套深度（跨行），区分字符串/注释内的括号（假阳性修复）
 		escaped := false
