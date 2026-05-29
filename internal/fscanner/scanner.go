@@ -128,14 +128,9 @@ func (s *Scanner) Scan(root string) (*model.ScanResult, error) {
 	}
 	result.FileCount = fileCount
 
-	// 步骤2: 并发解析文件
-	allFunctions, allGlobals, parseErrors := s.parseConcurrently(files, absRoot, sessionID)
-	result.Functions = allFunctions
-	result.GlobalVars = allGlobals
-	result.Errors = parseErrors
-
-	// 步骤3: 写入数据库并更新会话
-	if err := s.writeResults(allFunctions, allGlobals, sessionID, start, fileCount, result); err != nil {
+	// 步骤2+3: 并发解析文件 + 流水线写入数据库
+	resultsCh := s.parseConcurrently(files, absRoot, sessionID)
+	if err := s.writeResults(resultsCh, sessionID, start, fileCount, result); err != nil {
 		return nil, err
 	}
 
@@ -223,16 +218,18 @@ func (s *Scanner) collectFiles(absRoot string, tempPrefix string, result *model.
 	return files, len(files), nil
 }
 
-// parseConcurrently 并发解析所有收集到的文件
-func (s *Scanner) parseConcurrently(files []string, absRoot string, sessionID int64) ([]*model.Function, []*model.GlobalVariable, []string) {
+// parseResult 单个文件的解析结果
+type parseResult struct {
+	path      string
+	functions []*model.Function
+	globals   []*model.GlobalVariable
+	err       error
+}
+
+// parseConcurrently 并发解析所有收集到的文件，通过 channel 流式返回结果
+func (s *Scanner) parseConcurrently(files []string, absRoot string, sessionID int64) <-chan parseResult {
 	type parseJob struct {
 		path string
-	}
-	type parseResult struct {
-		path      string
-		functions []*model.Function
-		globals   []*model.GlobalVariable
-		err       error
 	}
 
 	fileCount := len(files)
@@ -276,11 +273,75 @@ func (s *Scanner) parseConcurrently(files []string, absRoot string, sessionID in
 		close(results)
 	}()
 
-	var allFunctions []*model.Function
-	var allGlobals []*model.GlobalVariable
+	return results
+}
+
+const batchFlushThreshold = 30
+
+// writeResults 从 channel 消费解析结果，分批流水线写入数据库（与解析重叠执行）
+func (s *Scanner) writeResults(resultsCh <-chan parseResult, sessionID int64, start time.Time, fileCount int, result *model.ScanResult) error {
+	var funcBatch []*model.Function
+	var varBatch []*model.GlobalVariable
 	var parseErrors []string
 
-	for res := range results {
+	// 复用 result 的切片来累积全量数据（用于最终输出），funcBatch/varBatch 为当前批次指针
+	result.Functions = result.Functions[:0]
+	result.GlobalVars = result.GlobalVars[:0]
+
+	// flushBatch 将当前批次写入数据库
+	flushBatch := func() error {
+		if len(funcBatch) == 0 && len(varBatch) == 0 {
+			return nil
+		}
+		if s.Verbose {
+			fmt.Fprintf(os.Stderr, "info: flushing batch: %d functions, %d global vars...\n",
+				len(funcBatch), len(varBatch))
+		}
+
+		if len(funcBatch) > 0 {
+			ids, skipped, changed, err := s.Store.BatchInsertFunctions(funcBatch, sessionID)
+			if err != nil {
+				return fmt.Errorf("batch insert: %w", err)
+			}
+			if s.Verbose {
+				fmt.Fprintf(os.Stderr, "info: functions: %d new, %d skipped (unchanged), %d changed\n",
+					len(ids)-skipped-changed, skipped, changed)
+			}
+
+			if skipped < len(funcBatch) {
+				depsMap := make(map[int64][]string)
+				for i, id := range ids {
+					if len(funcBatch[i].Dependencies) > 0 {
+						depsMap[id] = funcBatch[i].Dependencies
+					}
+				}
+				if len(depsMap) > 0 {
+					if err := s.Store.BatchInsertDeps(depsMap); err != nil {
+						return fmt.Errorf("batch insert deps: %w", err)
+					}
+				}
+			} else if s.Verbose {
+				fmt.Fprintf(os.Stderr, "info: deps skipped (no function changes)\n")
+			}
+		}
+
+		if len(varBatch) > 0 {
+			skipped, changed, err := s.Store.BatchInsertGlobalVars(varBatch, sessionID)
+			if err != nil {
+				return fmt.Errorf("batch insert globals: %w", err)
+			}
+			if s.Verbose {
+				fmt.Fprintf(os.Stderr, "info: global vars: %d new, %d skipped (unchanged), %d changed\n",
+					len(varBatch)-skipped-changed, skipped, changed)
+			}
+		}
+
+		funcBatch = funcBatch[:0]
+		varBatch = varBatch[:0]
+		return nil
+	}
+
+	for res := range resultsCh {
 		if res.err != nil {
 			errMsg := fmt.Sprintf("parse %s: %v", res.path, res.err)
 			parseErrors = append(parseErrors, errMsg)
@@ -289,76 +350,44 @@ func (s *Scanner) parseConcurrently(files []string, absRoot string, sessionID in
 			}
 			continue
 		}
-		relPath, _ := filepath.Rel(absRoot, res.path)
+		relPath, _ := filepath.Rel(result.Session.ProjectRoot, res.path)
 		for _, f := range res.functions {
 			f.FilePath = relPath
-			allFunctions = append(allFunctions, f)
+			funcBatch = append(funcBatch, f)
 		}
 		for _, g := range res.globals {
 			g.FilePath = relPath
-			allGlobals = append(allGlobals, g)
-		}
-	}
-
-	return allFunctions, allGlobals, parseErrors
-}
-
-// writeResults 将解析结果批量写入数据库并更新会话统计
-func (s *Scanner) writeResults(allFunctions []*model.Function, allGlobals []*model.GlobalVariable, sessionID int64, start time.Time, fileCount int, result *model.ScanResult) error {
-	if s.Verbose && len(allFunctions) > 0 {
-		fmt.Fprintf(os.Stderr, "info: writing %d functions to database...\n", len(allFunctions))
-	}
-	if s.Verbose && len(allGlobals) > 0 {
-		fmt.Fprintf(os.Stderr, "info: writing %d global variables to database...\n", len(allGlobals))
-	}
-
-	if len(allFunctions) > 0 {
-		ids, skipped, changed, err := s.Store.BatchInsertFunctions(allFunctions, sessionID)
-		if err != nil {
-			return fmt.Errorf("batch insert: %w", err)
-		}
-		if s.Verbose {
-			fmt.Fprintf(os.Stderr, "info: functions: %d new, %d skipped (unchanged), %d changed\n",
-				len(ids)-skipped-changed, skipped, changed)
+			varBatch = append(varBatch, g)
 		}
 
-		if skipped < len(allFunctions) {
-			depsMap := make(map[int64][]string)
-			for i, id := range ids {
-				if len(allFunctions[i].Dependencies) > 0 {
-					depsMap[id] = allFunctions[i].Dependencies
-				}
+		result.Functions = append(result.Functions, res.functions...)
+		result.GlobalVars = append(result.GlobalVars, res.globals...)
+
+		// 累积达到阈值时提前 flush，与剩余解析任务重叠执行
+		if len(funcBatch) >= batchFlushThreshold || len(varBatch) >= batchFlushThreshold {
+			if err := flushBatch(); err != nil {
+				return err
 			}
-			if len(depsMap) > 0 {
-				if err := s.Store.BatchInsertDeps(depsMap); err != nil {
-					return fmt.Errorf("batch insert deps: %w", err)
-				}
-			}
-		} else if s.Verbose {
-			fmt.Fprintf(os.Stderr, "info: deps skipped (no function changes)\n")
 		}
 	}
 
-	if len(allGlobals) > 0 {
-		skipped, changed, err := s.Store.BatchInsertGlobalVars(allGlobals, sessionID)
-		if err != nil {
-			return fmt.Errorf("batch insert globals: %w", err)
-		}
-		if s.Verbose {
-			fmt.Fprintf(os.Stderr, "info: global vars: %d new, %d skipped (unchanged), %d changed\n",
-				len(allGlobals)-skipped-changed, skipped, changed)
-		}
+	// 刷新最后一批
+	if err := flushBatch(); err != nil {
+		return err
 	}
 
-	if err := s.Store.UpdateSession(sessionID, time.Since(start), fileCount, len(allFunctions), len(allGlobals)); err != nil && s.Verbose {
+	result.Errors = parseErrors
+
+	// 更新会话统计
+	if err := s.Store.UpdateSession(sessionID, time.Since(start), fileCount, len(result.Functions), len(result.GlobalVars)); err != nil && s.Verbose {
 		fmt.Fprintf(os.Stderr, "warn: UpdateSession: %v\n", err)
 	}
 
 	result.Duration = time.Since(start)
 	result.Session.ID = sessionID
 	result.Session.FileCount = fileCount
-	result.Session.FuncCount = len(allFunctions)
-	result.Session.VarCount = len(allGlobals)
+	result.Session.FuncCount = len(result.Functions)
+	result.Session.VarCount = len(result.GlobalVars)
 	result.Session.Duration = result.Duration.Milliseconds()
 
 	// 批量写入完成后 checkpoint WAL，避免 WAL 无限膨胀

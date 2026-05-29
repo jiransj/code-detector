@@ -14,8 +14,11 @@ import (
 
 // Store 封装所有数据库 CRUD 操作
 type Store struct {
-	DB *sql.DB
-	mu sync.Mutex // 保护写入操作，防止并发竞态
+	DB          *sql.DB
+	sessionMu   sync.Mutex // 保护会话创建/更新/清理
+	funcMu      sync.Mutex // 保护函数批量写入
+	depsMu      sync.Mutex // 保护依赖关系批量写入
+	globalVarMu sync.Mutex // 保护全局变量批量写入
 }
 
 // NewStore 创建 Store 实例
@@ -26,8 +29,8 @@ func NewStore(db *sql.DB) *Store {
 // CreateSession 创建一次扫描会话，返回 session_id
 // 创建后会清理超过 3 个的旧历史会话，防止 DB 膨胀
 func (s *Store) CreateSession(root string) (int64, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.sessionMu.Lock()
+	defer s.sessionMu.Unlock()
 
 	now := time.Now()
 	res, err := s.DB.Exec(
@@ -104,8 +107,8 @@ func (s *Store) pruneOldSessionsLocked(keepCount int) error {
 
 // UpdateSession 扫描完成后更新会话统计
 func (s *Store) UpdateSession(sessionID int64, duration time.Duration, fileCount, funcCount, varCount int) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.sessionMu.Lock()
+	defer s.sessionMu.Unlock()
 
 	_, err := s.DB.Exec(
 		`UPDATE scan_sessions SET duration_ms=?, file_count=?, func_count=?, var_count=? WHERE id=?`,
@@ -217,8 +220,8 @@ func (s *Store) CheckExistingFuncHashes(sessionID int64, funcs []*model.Function
 // BatchInsertFunctions 批量插入函数（事务内），带哈希去重
 // 返回 (新插入的ID列表, 跳过的数量, 变更的数量)
 func (s *Store) BatchInsertFunctions(functions []*model.Function, sessionID int64) ([]int64, int, int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.funcMu.Lock()
+	defer s.funcMu.Unlock()
 
 	// 先查询已有的函数
 	existing, hashMap, err := s.CheckExistingFuncHashes(sessionID, functions)
@@ -292,8 +295,8 @@ func (s *Store) BatchInsertFunctions(functions []*model.Function, sessionID int6
 
 // BatchInsertDeps 批量插入依赖关系（事务内）
 func (s *Store) BatchInsertDeps(deps map[int64][]string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.depsMu.Lock()
+	defer s.depsMu.Unlock()
 
 	tx, err := s.DB.Begin()
 	if err != nil {
@@ -413,8 +416,8 @@ func (s *Store) QueryAllSessions() ([]*model.ScanSession, error) {
 
 // BatchInsertGlobalVars 批量插入全局变量（事务内）
 func (s *Store) BatchInsertGlobalVars(vars []*model.GlobalVariable, sessionID int64) (int, int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.globalVarMu.Lock()
+	defer s.globalVarMu.Unlock()
 
 	// 查询已有的全局变量
 	existing := make(map[string]int64) // "file:name:line" → id
