@@ -7,6 +7,9 @@ scaned_db/
 # 构建产物
 build/
 *.exe
+
+# Release 二进制（通过 GitHub Releases 分发，不提交仓库）
+release_*/
 *.test
 
 # IDE
