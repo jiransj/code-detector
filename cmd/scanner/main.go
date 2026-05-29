@@ -23,8 +23,15 @@ const version = "0.6"
 // cleanup 退出前需执行的清理（关闭 DB 确保 WAL 回归），main 中初始化，fatal 中调用
 var cleanup func()
 
+// noWait 为 true 时 waitForExit 跳过 stdin 等待（查询模式/管道模式）
+var noWait bool
+
 // waitForExit 在程序退出前等待用户按键（兼容命令行、双击启动、管道输入）
 func waitForExit() {
+	if noWait {
+		return
+	}
+
 	fmt.Print("\n按 Enter 键退出...")
 
 	// 尝试读取 stdin（终端模式下会阻塞等待 Enter）
@@ -375,12 +382,14 @@ func main() {
 
 	dbPath, cfgPath, langs, skipDirs, verbose, showVer, workers, buildGraph, incremental, maxSize, debug, queryMode := parseFlags()
 	if showVer {
+		noWait = true
 		fmt.Printf("code-detector v%s\n", version)
 		return
 	}
 
 	// 查询模式：不扫描，直接读取已有数据库
 	if queryMode != "" {
+		noWait = true // 查询模式/管道模式跳过 stdin 等待
 		runQueryMode(dbPath, queryMode)
 		return
 	}
