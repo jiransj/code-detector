@@ -98,6 +98,14 @@ code-detector -graph ./myproject
 code-detector -incremental ./myproject
 ```
 
+**One-click scan (skip all test folders):**
+
+```cmd
+scan.bat
+```
+
+A `scan.bat` is provided in the project root. Double-click it to run code-detector with `-skip-dirs testdata,testdata_extreme,tests,test,__tests__,node_modules,mock,mocks`, automatically skipping common test/temp directories — ideal for quick daily scans.
+
 **Debug mode (view parser skip details):**
 
 ```cmd
