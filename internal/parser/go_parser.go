@@ -111,13 +111,31 @@ func (p *GoParser) Parse(filePath string, content []byte) ([]*model.Function, er
 	stringMask := makeStringMask(lines)
 	pkgName := extractGoPackageName(lines, commentMask)
 
-	type goFuncStart struct {
-		matchStart int // 匹配位置（func 关键字附近的偏移）
-		name       string
-		lineIdx    int
+	starts := findGoFuncStarts(lines, commentMask, stringMask, fl)
+	if len(starts) == 0 {
+		return nil, nil
 	}
-	var starts []goFuncStart
 
+	allFuncs := make([]*model.Function, 0, len(starts))
+	for _, fs := range starts {
+		f := buildGoFunction(fs, lines, text, commentMask, stringMask, fl, filePath, pkgName)
+		if f != nil {
+			allFuncs = append(allFuncs, f)
+		}
+	}
+	return allFuncs, nil
+}
+
+// goFuncStart 记录一次 func 匹配结果
+type goFuncStart struct {
+	matchStart int // 匹配位置（func 关键字附近的偏移）
+	name       string
+	lineIdx    int
+}
+
+// findGoFuncStarts 遍历行，找到所有 func 定义的位置
+func findGoFuncStarts(lines []string, commentMask, stringMask []bool, fl *FileLines) []goFuncStart {
+	var starts []goFuncStart
 	for i, line := range lines {
 		if commentMask[i] || stringMask[i] {
 			continue
@@ -133,7 +151,7 @@ func (p *GoParser) Parse(filePath string, content []byte) ([]*model.Function, er
 			continue
 		}
 
-			matches := goFuncRegex.FindStringSubmatch(line)
+		matches := goFuncRegex.FindStringSubmatch(line)
 		if matches == nil {
 			continue
 		}
@@ -156,83 +174,74 @@ func (p *GoParser) Parse(filePath string, content []byte) ([]*model.Function, er
 		matchStart := fl.LineOffset(i) + funcIdx
 		starts = append(starts, goFuncStart{matchStart: matchStart, name: name, lineIdx: i})
 	}
+	return starts
+}
 
-	if len(starts) == 0 {
-		return nil, nil
-	}
-
-	allFuncs := make([]*model.Function, 0, len(starts))
-
-	for _, fs := range starts {
-		// 从函数匹配位置之后找 "{", 而不是整行的第一个 "{"
-		// 避免同一行上 struct/interface 等前置构造体的括号被误匹配
-		braceLine := fs.lineIdx
-		funcIdxInLine := fs.matchStart - fl.LineOffset(braceLine)
-		afterFunc := lines[braceLine][funcIdxInLine:]
-		// 在 afterFunc 中找不在字符串内的 {，防止字符串字面量中的 { 被误匹配
-		braceIdxInLine := findBraceInLine(afterFunc)
-		if braceIdxInLine < 0 {
-			// 当前行函数名后没找到 "{", 可能在后续行
-			for j := braceLine + 1; j < len(lines); j++ {
-				if commentMask[j] || stringMask[j] {
-					continue
-				}
-				if idx := findBraceInLine(lines[j]); idx >= 0 {
-					braceLine = j
-					braceIdxInLine = idx
-					break
-				}
-			}
-			if braceIdxInLine < 0 {
+// buildGoFunction 根据 goFuncStart 构建 Function 对象
+func buildGoFunction(fs goFuncStart, lines []string, text string, commentMask, stringMask []bool, fl *FileLines, filePath, pkgName string) *model.Function {
+	// 从函数匹配位置之后找 "{", 而不是整行的第一个 "{"
+	// 避免同一行上 struct/interface 等前置构造体的括号被误匹配
+	braceLine := fs.lineIdx
+	funcIdxInLine := fs.matchStart - fl.LineOffset(braceLine)
+	afterFunc := lines[braceLine][funcIdxInLine:]
+	// 在 afterFunc 中找不在字符串内的 {，防止字符串字面量中的 { 被误匹配
+	braceIdxInLine := findBraceInLine(afterFunc)
+	if braceIdxInLine < 0 {
+		// 当前行函数名后没找到 "{", 可能在后续行
+		for j := braceLine + 1; j < len(lines); j++ {
+			if commentMask[j] || stringMask[j] {
 				continue
 			}
-		} else {
-			braceIdxInLine += funcIdxInLine
-		}
-		offset := fl.LineOffset(braceLine) + braceIdxInLine
-
-		closeOffset, err := matchBrace(text, offset)
-		if err != nil {
-			continue
-		}
-
-		startLine := fl.LineFromOffset(fs.matchStart)
-		endLine := fl.LineFromOffset(closeOffset)
-
-		bodyStart := fs.matchStart
-		bodyEnd := closeOffset + 1
-		if bodyEnd > len(text) {
-			bodyEnd = len(text)
-		}
-		if bodyEnd < bodyStart {
-			// matchBrace 返回的 closeOffset 在 matchStart 之前，说明括号匹配失败
-			// 跳过此函数以避免空 body 入库或 panic
-			if DebugMode {
-				fmt.Fprintf(os.Stderr, "debug: go_parser: brace mismatch at %s:%d~%d (matchStart=%d, closeOffset=%d), skipping func %s\n",
-					filePath, startLine+1, endLine+1, fs.matchStart, closeOffset, fs.name)
+			if idx := findBraceInLine(lines[j]); idx >= 0 {
+				braceLine = j
+				braceIdxInLine = idx
+				break
 			}
-			continue
 		}
-		body := text[bodyStart:bodyEnd]
-
-		callStats := extractCallStats(body, goCallRegex, stringMask, commentMask, startLine, endLine, isKeyword, isAllUpper)
-
-		f := &model.Function{
-			Name:         fs.name,
-			PackageName:  pkgName,
-			Language:     "go",
-			FilePath:     filePath,
-			LineStart:    startLine + 1,
-			LineEnd:      endLine + 1,
-			Body:         body,
-			Dependencies: callStats.Callees,
-			CallCount:    callStats.CallCount,
-			NestingDepth: callStats.NestingDepth,
+		if braceIdxInLine < 0 {
+			return nil
 		}
-		allFuncs = append(allFuncs, f)
+	} else {
+		braceIdxInLine += funcIdxInLine
+	}
+	offset := fl.LineOffset(braceLine) + braceIdxInLine
+
+	closeOffset, err := matchBrace(text, offset)
+	if err != nil {
+		return nil
 	}
 
-	return allFuncs, nil
+	startLine := fl.LineFromOffset(fs.matchStart)
+	endLine := fl.LineFromOffset(closeOffset)
+
+	bodyStart := fs.matchStart
+	bodyEnd := closeOffset + 1
+	if bodyEnd > len(text) {
+		bodyEnd = len(text)
+	}
+	if bodyEnd < bodyStart {
+		if DebugMode {
+			fmt.Fprintf(os.Stderr, "debug: go_parser: brace mismatch at %s:%d~%d (matchStart=%d, closeOffset=%d), skipping func %s\n",
+				filePath, startLine+1, endLine+1, fs.matchStart, closeOffset, fs.name)
+		}
+		return nil
+	}
+	body := text[bodyStart:bodyEnd]
+
+	callStats := extractCallStats(body, goCallRegex, stringMask, commentMask, startLine, endLine, isKeyword, isAllUpper)
+
+	return &model.Function{
+		Name:         fs.name,
+		PackageName:  pkgName,
+		Language:     "go",
+		FilePath:     filePath,
+		LineStart:    startLine + 1,
+		LineEnd:      endLine + 1,
+		Body:         body,
+		Dependencies: callStats.Callees,
+		CallCount:    callStats.CallCount,
+		NestingDepth: callStats.NestingDepth,
+	}
 }
 
 // Globals 提取 Go 文件中的全局变量和常量

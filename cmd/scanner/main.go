@@ -172,16 +172,9 @@ func initDB(dbPath string, verbose bool) *db.Store {
 // initScanner 创建并配置扫描器
 func initScanner(cfg *config.Config, store *db.Store, verbose bool, incremental bool, maxSize int64, workers int, langs string, skipDirs string) *fscanner.Scanner {
 	reg := parser.NewRegistry()
-	reg.Register(parser.NewGoParser(), ".go")
-	reg.Register(parser.NewPythonParser(), ".py")
-	reg.Register(parser.NewJavaParser(), ".java")
-	reg.Register(parser.NewKotlinParser(), ".kt", ".kts")
-	reg.Register(parser.NewJavascriptParser(), ".js", ".jsx", ".mjs")
-	reg.Register(parser.NewTypescriptParser(), ".ts", ".tsx")
-	reg.Register(parser.NewCSharpParser(), ".cs")
-	reg.Register(parser.NewCPPParser(), ".cpp", ".cxx", ".cc", ".c", ".h", ".hpp")
-	reg.Register(parser.NewRustParser(), ".rs")
-	reg.Register(parser.NewRubyParser(), ".rb")
+	for _, pr := range parser.DefaultParsers() {
+		reg.Register(pr.Parser, pr.Extensions...)
+	}
 
 	for _, langCfg := range cfg.Languages {
 		for _, ext := range langCfg.Extensions {
