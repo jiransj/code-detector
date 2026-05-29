@@ -284,62 +284,8 @@ func (s *Scanner) writeResults(resultsCh <-chan parseResult, sessionID int64, st
 	var varBatch []*model.GlobalVariable
 	var parseErrors []string
 
-	// 复用 result 的切片来累积全量数据（用于最终输出），funcBatch/varBatch 为当前批次指针
 	result.Functions = result.Functions[:0]
 	result.GlobalVars = result.GlobalVars[:0]
-
-	// flushBatch 将当前批次写入数据库
-	flushBatch := func() error {
-		if len(funcBatch) == 0 && len(varBatch) == 0 {
-			return nil
-		}
-		if s.Verbose {
-			fmt.Fprintf(os.Stderr, "info: flushing batch: %d functions, %d global vars...\n",
-				len(funcBatch), len(varBatch))
-		}
-
-		if len(funcBatch) > 0 {
-			ids, skipped, changed, err := s.Store.BatchInsertFunctions(funcBatch, sessionID)
-			if err != nil {
-				return fmt.Errorf("batch insert: %w", err)
-			}
-			if s.Verbose {
-				fmt.Fprintf(os.Stderr, "info: functions: %d new, %d skipped (unchanged), %d changed\n",
-					len(ids)-skipped-changed, skipped, changed)
-			}
-
-			if skipped < len(funcBatch) {
-				depsMap := make(map[int64][]string)
-				for i, id := range ids {
-					if len(funcBatch[i].Dependencies) > 0 {
-						depsMap[id] = funcBatch[i].Dependencies
-					}
-				}
-				if len(depsMap) > 0 {
-					if err := s.Store.BatchInsertDeps(depsMap); err != nil {
-						return fmt.Errorf("batch insert deps: %w", err)
-					}
-				}
-			} else if s.Verbose {
-				fmt.Fprintf(os.Stderr, "info: deps skipped (no function changes)\n")
-			}
-		}
-
-		if len(varBatch) > 0 {
-			skipped, changed, err := s.Store.BatchInsertGlobalVars(varBatch, sessionID)
-			if err != nil {
-				return fmt.Errorf("batch insert globals: %w", err)
-			}
-			if s.Verbose {
-				fmt.Fprintf(os.Stderr, "info: global vars: %d new, %d skipped (unchanged), %d changed\n",
-					len(varBatch)-skipped-changed, skipped, changed)
-			}
-		}
-
-		funcBatch = funcBatch[:0]
-		varBatch = varBatch[:0]
-		return nil
-	}
 
 	for res := range resultsCh {
 		if res.err != nil {
@@ -363,22 +309,77 @@ func (s *Scanner) writeResults(resultsCh <-chan parseResult, sessionID int64, st
 		result.Functions = append(result.Functions, res.functions...)
 		result.GlobalVars = append(result.GlobalVars, res.globals...)
 
-		// 累积达到阈值时提前 flush，与剩余解析任务重叠执行
 		if len(funcBatch) >= batchFlushThreshold || len(varBatch) >= batchFlushThreshold {
-			if err := flushBatch(); err != nil {
+			if err := s.flushBatch(funcBatch, varBatch, sessionID); err != nil {
 				return err
 			}
+			funcBatch = funcBatch[:0]
+			varBatch = varBatch[:0]
 		}
 	}
 
 	// 刷新最后一批
-	if err := flushBatch(); err != nil {
+	if err := s.flushBatch(funcBatch, varBatch, sessionID); err != nil {
 		return err
 	}
 
 	result.Errors = parseErrors
+	s.finalizeSession(sessionID, start, fileCount, result)
+	return nil
+}
 
-	// 更新会话统计
+// flushBatch 将当前批次写入数据库
+func (s *Scanner) flushBatch(funcBatch []*model.Function, varBatch []*model.GlobalVariable, sessionID int64) error {
+	if len(funcBatch) == 0 && len(varBatch) == 0 {
+		return nil
+	}
+	if s.Verbose {
+		fmt.Fprintf(os.Stderr, "info: flushing batch: %d functions, %d global vars...\n",
+			len(funcBatch), len(varBatch))
+	}
+
+	if len(funcBatch) > 0 {
+		ids, skipped, changed, err := s.Store.BatchInsertFunctions(funcBatch, sessionID)
+		if err != nil {
+			return fmt.Errorf("batch insert: %w", err)
+		}
+		if s.Verbose {
+			fmt.Fprintf(os.Stderr, "info: functions: %d new, %d skipped (unchanged), %d changed\n",
+				len(ids)-skipped-changed, skipped, changed)
+		}
+
+		if skipped < len(funcBatch) {
+			depsMap := make(map[int64][]string)
+			for i, id := range ids {
+				if len(funcBatch[i].Dependencies) > 0 {
+					depsMap[id] = funcBatch[i].Dependencies
+				}
+			}
+			if len(depsMap) > 0 {
+				if err := s.Store.BatchInsertDeps(depsMap); err != nil {
+					return fmt.Errorf("batch insert deps: %w", err)
+				}
+			}
+		} else if s.Verbose {
+			fmt.Fprintf(os.Stderr, "info: deps skipped (no function changes)\n")
+		}
+	}
+
+	if len(varBatch) > 0 {
+		skipped, changed, err := s.Store.BatchInsertGlobalVars(varBatch, sessionID)
+		if err != nil {
+			return fmt.Errorf("batch insert globals: %w", err)
+		}
+		if s.Verbose {
+			fmt.Fprintf(os.Stderr, "info: global vars: %d new, %d skipped (unchanged), %d changed\n",
+				len(varBatch)-skipped-changed, skipped, changed)
+		}
+	}
+	return nil
+}
+
+// finalizeSession 更新会话统计并执行 WAL checkpoint
+func (s *Scanner) finalizeSession(sessionID int64, start time.Time, fileCount int, result *model.ScanResult) {
 	if err := s.Store.UpdateSession(sessionID, time.Since(start), fileCount, len(result.Functions), len(result.GlobalVars)); err != nil && s.Verbose {
 		fmt.Fprintf(os.Stderr, "warn: UpdateSession: %v\n", err)
 	}
@@ -390,10 +391,7 @@ func (s *Scanner) writeResults(resultsCh <-chan parseResult, sessionID int64, st
 	result.Session.VarCount = len(result.GlobalVars)
 	result.Session.Duration = result.Duration.Milliseconds()
 
-	// 批量写入完成后 checkpoint WAL，避免 WAL 无限膨胀
 	s.Store.Checkpoint()
-
-	return nil
 }
 
 // parseFile 解析单个文件，自动处理编码，返回 (函数列表, 全局变量列表, 错误)

@@ -58,3 +58,25 @@ func (r *Registry) SupportedExts() []string {
 	}
 	return exts
 }
+
+// ParserRegistration 描述一个解析器及其关联的文件扩展名
+type ParserRegistration struct {
+	Parser     Parser
+	Extensions []string
+}
+
+// DefaultParsers 返回内置的解析器列表，用于自动注册
+func DefaultParsers() []ParserRegistration {
+	return []ParserRegistration{
+		{NewGoParser(), []string{".go"}},
+		{NewPythonParser(), []string{".py"}},
+		{NewJavaParser(), []string{".java"}},
+		{NewKotlinParser(), []string{".kt", ".kts"}},
+		{NewJavascriptParser(), []string{".js", ".jsx", ".mjs"}},
+		{NewTypescriptParser(), []string{".ts", ".tsx"}},
+		{NewCSharpParser(), []string{".cs"}},
+		{NewCPPParser(), []string{".cpp", ".cxx", ".cc", ".c", ".h", ".hpp"}},
+		{NewRustParser(), []string{".rs"}},
+		{NewRubyParser(), []string{".rb"}},
+	}
+}
