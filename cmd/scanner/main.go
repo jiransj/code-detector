@@ -18,20 +18,21 @@ import (
 
 const version = "0.5"
 
-// isInteractiveTerminal 检测是否在交互式终端中运行
-func isInteractiveTerminal() bool {
-	fi, err := os.Stdin.Stat()
-	if err != nil {
-		return false
-	}
-	return fi.Mode()&os.ModeCharDevice != 0
-}
+// cleanup 退出前需执行的清理（关闭 DB 确保 WAL 回归），main 中初始化，fatal 中调用
+var cleanup func()
 
-// waitForExit 在程序退出前等待用户按键
+// waitForExit 在程序退出前等待用户按键（无论是命令行还是双击启动）
 func waitForExit() {
-	if isInteractiveTerminal() {
-		fmt.Print("\n按 Enter 键退出...")
-		fmt.Scanln()
+	fmt.Print("\n按 Enter 键退出...")
+	// 逐字节读取直到换行，兼容双击启动时的 stdin 状态
+	var buf [1]byte
+	for {
+		if _, err := os.Stdin.Read(buf[:]); err != nil {
+			break
+		}
+		if buf[0] == '\n' {
+			break
+		}
 	}
 }
 
@@ -80,9 +81,13 @@ func validateScanRoot(root string) error {
 	return nil
 }
 
-// fatal 打印错误信息，等待按键后退
+// fatal 打印错误信息，执行清理后退出
 func fatal(format string, args ...interface{}) {
 	fmt.Fprintf(os.Stderr, "\n错误: "+format+"\n", args...)
+	// 先执行清理（关闭 DB 确保 WAL 回归），再等待按键
+	if cleanup != nil {
+		cleanup()
+	}
 	waitForExit()
 	os.Exit(1)
 }
@@ -366,7 +371,8 @@ func main() {
 	_ = initProjectRoot(projectRoot)       // 验证路径
 	cfg := initConfig(cfgPath, verbose)
 	store := initDB(dbPath, verbose)
-	defer store.Close() // 关闭前自动 checkpoint WAL
+	cleanup = func() { store.Close() }
+	defer cleanup()
 	scan := initScanner(cfg, store, verbose, incremental, maxSize, workers, langs, skipDirs)
 
 	printBanner(projectRoot, dbPath, scan, cfg, verbose)
