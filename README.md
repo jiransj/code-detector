@@ -136,6 +136,7 @@ code-detector -debug ./myproject
 | `-debug` | 等同于 `-verbose`，并输出各语言解析器的调试信息（如括号匹配失败时的跳过详情），用于报告解析器 bug |
 | `-graph` | 扫描完成后构建调用关系图并输出统计摘要 |
 | `-incremental` | 增量扫描模式：仅重新解析 mtime（修改时间）发生变化的文件 |
+| `-format` | 输出格式: `text`（默认）或 `json`（仅查询模式） | `-format json` |
 | `-v` | 显示版本号 |
 
 ---
@@ -242,17 +243,17 @@ code-detector -lang go,python -verbose D:\projects\myapp
 
 ## 查询模式（`-query`）
 
-**v0.6 新增** — 无需重新扫描，直接读取已有 SQLite 数据库进行分析，支持对扫描结果的离线审计。
+无需重新扫描，直接读取已有 SQLite 数据库进行分析，支持对扫描结果的离线审计。
 
 ```cmd
-code-detector -query <模式> [-db <数据库路径>]
+code-detector -query <模式> [-db <数据库路径>] [-format text|json]
 ```
 
 | 模式 | 说明 | 示例 |
 |------|------|------|
 | `summary` | 显示数据库概要（会话数、函数/变量总数、语言分布等） | `-query summary` |
-| `functions` | 列出所有函数（按文件分组，显示行号范围、调用次数） | `-query functions` |
-| `func=NAME` | 查看指定函数的详细信息（依赖、调用方、函数体） | `-query func=main` |
+| `functions` | 列出所有函数（不含函数体，按文件分组显示行号、调用次数） | `-query functions` |
+| `func=NAME` | 查看函数详情（支持逗号批量: `func=A,B,C`，含依赖、调用方、函数体预览） | `-query func=main` |
 | `vars` | 列出所有全局变量 | `-query vars` |
 | `deps` | 调用统计：最热函数、死代码候选、调用分支最广的函数 | `-query deps` |
 | `calls=NAME` | 查看哪些函数调用了指定函数 | `-query calls=Parse` |
@@ -261,14 +262,16 @@ code-detector -query <模式> [-db <数据库路径>]
 | `top=N` | 列出行数最多的 N 个函数（超大函数风险分析） | `-query top=10` |
 | `deep=N` | 列出嵌套深度 >= N 的函数（复杂度分析） | `-query deep=3` |
 
-例如分析项目最大函数：
+**批量查询示例** — 同时查看多个函数详情：
 ```cmd
-code-detector -query top=5
+code-detector -query func=main,Scan,InitDB
 ```
 
-检查所有可调用依赖是否完整：
+**JSON 输出示例** — 所有 `-query` 模式均支持：
 ```cmd
-code-detector -query missing
+code-detector -query summary -format json
+code-detector -query func=main -format json
+code-detector -query top=5 -format json
 ```
 
 启用 `-graph` 选项时，终端会输出调用关系统计摘要。

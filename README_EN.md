@@ -136,6 +136,7 @@ code-detector -db ./output/my_scan.db -verbose ./myproject
 | `-debug` | Same as `-verbose`, plus parser-level debug output (e.g. brace mismatch skip details). Use when reporting parser bugs |
 | `-graph` | Build a call graph after scanning and print a statistical summary |
 | `-incremental` | Incremental scan mode: only re-parse files whose mtime has changed |
+| `-format` | Output format: `text` (default) or `json` (query mode only) | `-format json` |
 | `-v` | Show version number |
 
 ---
@@ -246,17 +247,17 @@ When the `-graph` option is enabled, a call graph statistical summary is printed
 
 ## Query Mode (`-query`)
 
-**New in v0.6** — Read and analyze an existing SQLite database directly without re-scanning.
+Read and analyze an existing SQLite database directly without re-scanning.
 
 ```cmd
-code-detector -query <mode> [-db <database_path>]
+code-detector -query <mode> [-db <database_path>] [-format text|json]
 ```
 
 | Mode | Description | Example |
 |------|-------------|---------|
 | `summary` | Show database overview (session count, function/variable totals, language distribution) | `-query summary` |
-| `functions` | List all functions (grouped by file, with line range and call count) | `-query functions` |
-| `func=NAME` | Show detailed information for a specific function (dependencies, callers, body) | `-query func=main` |
+| `functions` | List all functions (no body field, grouped by file with line range and call count) | `-query functions` |
+| `func=NAME` | Show function details (supports comma-separated batch: `func=A,B,C`; includes dependencies, callers, body preview) | `-query func=main` |
 | `vars` | List all global variables | `-query vars` |
 | `deps` | Call statistics: hottest functions, dead code candidates, widest call branches | `-query deps` |
 | `calls=NAME` | Show which functions call the specified function | `-query calls=Parse` |
@@ -265,26 +266,16 @@ code-detector -query <mode> [-db <database_path>]
 | `top=N` | List the N largest functions by line count (risk analysis for oversized functions) | `-query top=10` |
 | `deep=N` | List functions with nesting depth >= N (complexity analysis) | `-query deep=3` |
 
-Examples:
-
-Analyze the largest functions in a project:
+**Batch query example** — inspect multiple functions at once:
 ```cmd
-code-detector -query top=5
+code-detector -query func=main,Scan,InitDB
 ```
 
-Check for unresolved dependency references:
+**JSON output example** — all `-query` modes support JSON format:
 ```cmd
-code-detector -query missing
-```
-
-Examine a specific function's full details:
-```cmd
-code-detector -query func=Parse
-```
-
-View a summary of all scan sessions:
-```cmd
-code-detector -query summary
+code-detector -query summary -format json
+code-detector -query func=main -format json
+code-detector -query top=5 -format json
 ```
 
 ---
