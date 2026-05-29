@@ -8,7 +8,7 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
-  <img src="https://img.shields.io/badge/version-v0.5-brightgreen.svg" alt="Version v0.5">
+  <img src="https://img.shields.io/badge/version-v0.6-brightgreen.svg" alt="Version v0.6">
   <img src="https://img.shields.io/badge/go-1.26-blue.svg" alt="Go 1.26">
   <img src="https://img.shields.io/badge/platform-windows%20%7C%20linux-lightgrey.svg" alt="Platform">
 </p>
@@ -24,7 +24,7 @@
 - **Advantage**: Review project robustness from a function-level perspective — evaluate function quality and detect duplicate/reinvented functionality
 - Eliminate irrelevant context interference, providing excellent support for code agents
 
-Current version: **v0.5**
+Current version: **v0.6**
 
 ---
 
@@ -233,6 +233,51 @@ Scan results are stored by default in `scaned_db/scan_result.db` (SQLite databas
 | `session_id` | Associated session ID, references `scan_sessions.id` |
 
 When the `-graph` option is enabled, a call graph statistical summary is printed to the terminal.
+
+---
+
+## Query Mode (`-query`)
+
+**New in v0.6** — Read and analyze an existing SQLite database directly without re-scanning.
+
+```cmd
+code-detector -query <mode> [-db <database_path>]
+```
+
+| Mode | Description | Example |
+|------|-------------|---------|
+| `summary` | Show database overview (session count, function/variable totals, language distribution) | `-query summary` |
+| `functions` | List all functions (grouped by file, with line range and call count) | `-query functions` |
+| `func=NAME` | Show detailed information for a specific function (dependencies, callers, body) | `-query func=main` |
+| `vars` | List all global variables | `-query vars` |
+| `deps` | Call statistics: hottest functions, dead code candidates, widest call branches | `-query deps` |
+| `calls=NAME` | Show which functions call the specified function | `-query calls=Parse` |
+| `dead` | List functions with `call_count = 0` (potential dead code) | `-query dead` |
+| `missing` | List called functions that have no definition (dependency analysis) | `-query missing` |
+| `top=N` | List the N largest functions by line count (risk analysis for oversized functions) | `-query top=10` |
+| `deep=N` | List functions with nesting depth >= N (complexity analysis) | `-query deep=3` |
+
+Examples:
+
+Analyze the largest functions in a project:
+```cmd
+code-detector -query top=5
+```
+
+Check for unresolved dependency references:
+```cmd
+code-detector -query missing
+```
+
+Examine a specific function's full details:
+```cmd
+code-detector -query func=Parse
+```
+
+View a summary of all scan sessions:
+```cmd
+code-detector -query summary
+```
 
 ---
 

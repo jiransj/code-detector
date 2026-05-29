@@ -1,10 +1,93 @@
 package parser
 
 import (
+	"bytes"
 	"regexp"
+	"strings"
 
 	"code-detector/internal/model"
 )
+
+// stripStringContent 用空格替换字符串字面量和注释内容，使调用正则不会误匹配字符串/注释中的文本
+// 保留非字符串部分的位置对齐，确保行号/列号相关的调试信息不受影响
+func stripStringContent(line string) string {
+	inDouble := false
+	inSingle := false
+	inBacktick := false
+	inBlockComment := false
+	escaped := false
+	var buf bytes.Buffer
+	buf.Grow(len(line))
+	for i := 0; i < len(line); i++ {
+		ch := line[i]
+		if escaped {
+			escaped = false
+			buf.WriteByte(' ')
+			continue
+		}
+		if ch == '\\' && (inDouble || inSingle) {
+			escaped = true
+			buf.WriteByte(' ')
+			continue
+		}
+
+		// 处理字符串边界
+		if !inSingle && !inDouble && !inBacktick && !inBlockComment {
+			if ch == '"' {
+				inDouble = true
+				buf.WriteByte(' ')
+				continue
+			}
+			if ch == '\'' {
+				inSingle = true
+				buf.WriteByte(' ')
+				continue
+			}
+			if ch == '`' {
+				inBacktick = true
+				buf.WriteByte(' ')
+				continue
+			}
+			// 单行注释 // — 忽略本行剩余内容
+			if ch == '/' && i+1 < len(line) && line[i+1] == '/' {
+				// 保留注释标记之前的非字符串内容
+				return buf.String()
+			}
+			// 块注释 /* — 忽略至 */
+			if ch == '/' && i+1 < len(line) && line[i+1] == '*' {
+				inBlockComment = true
+				buf.WriteByte(' ')
+				i++ // skip '*'
+				continue
+			}
+		}
+
+		if inStringLike(inDouble, inSingle, inBacktick, inBlockComment) {
+			buf.WriteByte(' ')
+		} else {
+			buf.WriteByte(ch)
+		}
+
+		// 字符串/注释结束检测
+		if inDouble && ch == '"' && !escaped {
+			inDouble = false
+		} else if inSingle && ch == '\'' && !escaped {
+			inSingle = false
+		} else if inBacktick && ch == '`' {
+			inBacktick = false
+		} else if inBlockComment && ch == '*' && i+1 < len(line) && line[i+1] == '/' {
+			inBlockComment = false
+			buf.WriteByte(' ')
+			i++
+		}
+	}
+	return strings.TrimRight(buf.String(), " ")
+}
+
+// inStringLike 判断当前是否在字符串或注释内部
+func inStringLike(inDouble, inSingle, inBacktick, inBlockComment bool) bool {
+	return inDouble || inSingle || inBacktick || inBlockComment
+}
 
 // extractCalls 在函数体内提取函数调用（返回去重的被调用函数名列表）
 func extractCalls(body string, callRegex *regexp.Regexp, stringMask, commentMask []bool, startLine, endLine int) []string {
@@ -119,8 +202,9 @@ func extractCallStats(body string, callRegex *regexp.Regexp,
 			}
 		}
 
-		// 匹配函数调用
-		matches := callRegex.FindAllStringSubmatch(line, -1)
+		// 匹配函数调用（cleanLine 已剔除字符串/注释内的文本，防止假阳性）
+		cleanLine := stripStringContent(line)
+		matches := callRegex.FindAllStringSubmatch(cleanLine, -1)
 		for _, m := range matches {
 			if len(m) >= 3 {
 				prefix := m[1]
@@ -251,8 +335,9 @@ func extractCallStatsSimple(body string, callRegex *regexp.Regexp, skipFn func(s
 			}
 		}
 
-		// 匹配函数调用
-		matches := callRegex.FindAllStringSubmatch(line, -1)
+		// 匹配函数调用（cleanLine 已剔除字符串/注释内的文本，防止假阳性）
+		cleanLine := stripStringContent(line)
+		matches := callRegex.FindAllStringSubmatch(cleanLine, -1)
 		for _, m := range matches {
 			if len(m) >= 3 {
 				prefix := m[1]

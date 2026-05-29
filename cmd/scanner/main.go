@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,7 +18,7 @@ import (
 	"code-detector/internal/parser"
 )
 
-const version = "0.5"
+const version = "0.6"
 
 // cleanup 退出前需执行的清理（关闭 DB 确保 WAL 回归），main 中初始化，fatal 中调用
 var cleanup func()
@@ -372,9 +373,15 @@ func printCallGraph(buildGraph bool, store *db.Store, result *model.ScanResult) 
 func main() {
 	defer waitForExit()
 
-	dbPath, cfgPath, langs, skipDirs, verbose, showVer, workers, buildGraph, incremental, maxSize, debug := parseFlags()
+	dbPath, cfgPath, langs, skipDirs, verbose, showVer, workers, buildGraph, incremental, maxSize, debug, queryMode := parseFlags()
 	if showVer {
 		fmt.Printf("code-detector v%s\n", version)
+		return
+	}
+
+	// 查询模式：不扫描，直接读取已有数据库
+	if queryMode != "" {
+		runQueryMode(dbPath, queryMode)
 		return
 	}
 
@@ -413,7 +420,7 @@ func main() {
 }
 
 // parseFlags 解析命令行参数
-func parseFlags() (dbPath string, cfgPath string, langs string, skipDirs string, verbose bool, showVer bool, workers int, buildGraph bool, incremental bool, maxSize int64, debug bool) {
+func parseFlags() (dbPath string, cfgPath string, langs string, skipDirs string, verbose bool, showVer bool, workers int, buildGraph bool, incremental bool, maxSize int64, debug bool, queryMode string) {
 	flag.StringVar(&langs, "lang", "", "扫描语言，逗号分隔 (如 go,py,java)")
 	flag.StringVar(&dbPath, "db", "scaned_db/scan_result.db", "SQLite 数据库路径（默认 scaned_db/ 目录下）")
 	flag.StringVar(&cfgPath, "config", "config.yaml", "配置文件路径")
@@ -425,11 +432,13 @@ func parseFlags() (dbPath string, cfgPath string, langs string, skipDirs string,
 	flag.IntVar(&workers, "workers", 0, "并发工作数 (默认 CPU 核数)")
 	flag.BoolVar(&buildGraph, "graph", false, "扫描完成后构建调用图并输出统计")
 	flag.BoolVar(&incremental, "incremental", false, "增量扫描：仅重新解析 mtime 变更的文件")
+	flag.StringVar(&queryMode, "query", "", "查询模式：读取已有数据库而不扫描")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, `code-detector v%s — 多编程语言函数扫描工具
 
 用法:
   code-detector [选项] <项目根目录>
+  code-detector -query <模式> [-db <路径>]
 
 选项:
   -lang <列表>     扫描语言，逗号分隔 (如 go,py,java)
@@ -441,6 +450,17 @@ func parseFlags() (dbPath string, cfgPath string, langs string, skipDirs string,
   -verbose         输出详细日志
   -graph           扫描完成后构建调用图并输出统计
   -incremental     增量扫描：仅重新解析 mtime 变更的文件
+  -query <模式>    查询模式：读取已有数据库不扫描
+                    summary     显示数据库概要
+                    functions   列出所有函数
+                    func=NAME   查看指定函数详情
+                    vars        列出全局变量
+                    deps        显示调用统计
+                    calls=NAME  查看谁调用了指定函数
+                    dead        列出未被调用的函数
+                    missing     列出缺失的依赖
+                    top=N       列出最大的 N 个函数
+                    deep=N      列出深层嵌套函数
   -v               显示版本号
 
 示例:
@@ -448,8 +468,383 @@ func parseFlags() (dbPath string, cfgPath string, langs string, skipDirs string,
   code-detector -lang go,python,js -verbose ./src
   code-detector -verbose -skip-dirs .git,bin,obj ./src
   code-detector -graph ./myproject
+  code-detector -query summary
+  code-detector -query functions
+  code-detector -query func=main
+  code-detector -query dead
+  code-detector -query top=10
 `, version)
 	}
 	flag.Parse()
 	return
+}
+
+// ──────────────────────────────────────────────
+// 查询模式实现
+// ──────────────────────────────────────────────
+
+// runQueryMode 根据 query 参数执行对应的查询并输出
+func runQueryMode(dbPath string, queryMode string) {
+	// 只读打开数据库，不创建文件
+	sqlDB, err := db.InitDB(dbPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "错误: 打开数据库失败: %v\n", err)
+		return
+	}
+	store := db.NewStore(sqlDB)
+	defer store.Close()
+	// 注册清理函数，使子函数中的 fatal() 能正确关闭 DB
+	cleanup = func() { store.Close() }
+
+	// 解析 query 模式
+	mode := queryMode
+	param := ""
+	if idx := strings.IndexByte(mode, '='); idx >= 0 {
+		param = mode[idx+1:]
+		mode = mode[:idx]
+	}
+
+	switch mode {
+	case "summary":
+		printQuerySummary(store)
+	case "functions":
+		printQueryFunctions(store)
+	case "func":
+		if param == "" {
+			fmt.Println("用法: -query func=函数名")
+			return
+		}
+		printQueryFuncDetail(store, param)
+	case "vars":
+		printQueryVars(store)
+	case "deps":
+		printQueryDeps(store)
+	case "calls":
+		if param == "" {
+			fmt.Println("用法: -query calls=函数名")
+			return
+		}
+		printQueryCallers(store, param)
+	case "dead":
+		printQueryDead(store)
+	case "missing":
+		printQueryMissing(store)
+	case "top":
+		n := 10
+		if param != "" {
+			if v, err := strconv.Atoi(param); err == nil && v > 0 {
+				n = v
+			}
+		}
+		printQueryTop(store, n)
+	case "deep":
+		n := 3
+		if param != "" {
+			if v, err := strconv.Atoi(param); err == nil && v > 0 {
+				n = v
+			}
+		}
+		printQueryDeep(store, n)
+	default:
+		fmt.Fprintf(os.Stderr, "未知的查询模式: %s\n可用模式: summary, functions, func=NAME, vars, deps, calls=NAME, dead, missing, top=N, deep=N\n", queryMode)
+	}
+}
+
+// printQuerySummary 打印数据库概要
+func printQuerySummary(store *db.Store) {
+	summary, err := store.QuerySummary()
+	if err != nil {
+		fatal("查询摘要失败: %v", err)
+	}
+
+	fmt.Println("╔══════════════════════════════════════════╗")
+	fmt.Println("║      code-detector 数据库概要            ║")
+	fmt.Println("╚══════════════════════════════════════════╝")
+	fmt.Println()
+
+	fmt.Printf("  扫描会话数:  %d\n", summary["session_count"])
+	fmt.Printf("  函数总数:    %d\n", summary["func_count"])
+	fmt.Printf("  全局变量数:  %d\n", summary["var_count"])
+	fmt.Printf("  依赖关系数:  %d\n", summary["dep_count"])
+	fmt.Printf("  函数体总行数: %d\n", summary["total_lines"])
+	fmt.Println()
+
+	if latest := summary["latest_session"]; latest != nil {
+		ls := latest.(*model.ScanSession)
+		fmt.Println("  ── 最近一次扫描 ──")
+		fmt.Printf("    项目:    %s\n", ls.ProjectRoot)
+		fmt.Printf("    时间:    %s\n", ls.ScanTime.Format("2006-01-02 15:04:05"))
+		fmt.Printf("    耗时:    %d ms\n", ls.Duration)
+		fmt.Printf("    文件数:  %d\n", ls.FileCount)
+		fmt.Printf("    函数数:  %d\n", ls.FuncCount)
+		fmt.Printf("    变量数:  %d\n", ls.VarCount)
+		fmt.Println()
+	}
+
+	if langDist, ok := summary["lang_dist"].(map[string]int); ok && len(langDist) > 0 {
+		fmt.Println("  按语言分布 (函数):")
+		for lang, cnt := range langDist {
+			fmt.Printf("    %-15s %d\n", lang+":", cnt)
+		}
+		fmt.Println()
+	}
+
+	if varLangDist, ok := summary["var_lang_dist"].(map[string]int); ok && len(varLangDist) > 0 {
+		fmt.Println("  按语言分布 (全局变量):")
+		for lang, cnt := range varLangDist {
+			fmt.Printf("    %-15s %d\n", lang+":", cnt)
+		}
+		fmt.Println()
+	}
+}
+
+// printQueryFunctions 列出所有函数
+func printQueryFunctions(store *db.Store) {
+	funcs, err := store.QueryAllFunctions()
+	if err != nil {
+		fatal("查询函数列表失败: %v", err)
+	}
+
+	fmt.Printf("共 %d 个函数:\n\n", len(funcs))
+	// 按文件分组
+	byFile := make(map[string][]*db.FuncBrief)
+	for _, f := range funcs {
+		byFile[f.FilePath] = append(byFile[f.FilePath], f)
+	}
+
+	for file, flist := range byFile {
+		fmt.Printf("  %s:\n", file)
+		for _, f := range flist {
+			depth := ""
+			if f.NestingDepth > 0 {
+				depth = fmt.Sprintf(" depth=%d", f.NestingDepth)
+			}
+			fmt.Printf("    L%04d-%04d %-30s [%s] calls=%d%s\n",
+				f.LineStart, f.LineEnd, f.Name, f.Language, f.CallCount, depth)
+		}
+		fmt.Println()
+	}
+}
+
+// printQueryFuncDetail 查看指定函数的详细信息
+func printQueryFuncDetail(store *db.Store, name string) {
+	funcs, err := store.QueryFuncByName(name)
+	if err != nil {
+		fatal("查询函数失败: %v", err)
+	}
+	if len(funcs) == 0 {
+		fmt.Printf("未找到名称包含 '%s' 的函数\n", name)
+		return
+	}
+
+	for _, f := range funcs {
+		fmt.Println("═══════════════════════════════════════════")
+		fmt.Printf("  函数名:     %s\n", f.Name)
+		fmt.Printf("  包:         %s\n", f.PackageName)
+		fmt.Printf("  语言:       %s\n", f.Language)
+		fmt.Printf("  文件:       %s\n", f.FilePath)
+		fmt.Printf("  行号:       %d - %d (%d 行)\n", f.LineStart, f.LineEnd, f.LineEnd-f.LineStart+1)
+		fmt.Printf("  调用次数:   %d\n", f.CallCount)
+		fmt.Printf("  嵌套深度:   %d\n", f.NestingDepth)
+		fmt.Println()
+
+		// 被调用的依赖
+		deps, _ := store.QueryDependencies(f.ID)
+		if len(deps) > 0 {
+			fmt.Printf("  调用了 (%d):\n", len(deps))
+			for _, d := range deps {
+				fmt.Printf("    - %s\n", d)
+			}
+		} else {
+			fmt.Println("  调用了: (无)")
+		}
+		fmt.Println()
+
+		// 调用该函数的函数
+		callers, _ := store.QueryCallers(f.Name)
+		if len(callers) > 0 {
+			fmt.Printf("  被谁调用 (%d):\n", len(callers))
+			for _, c := range callers {
+				fmt.Printf("    - %s (%s L%d)\n", c.Name, c.FilePath, c.LineStart)
+			}
+		} else {
+			fmt.Println("  被谁调用: (无)")
+		}
+		fmt.Println()
+
+		// 函数体（截取前 20 行）
+		if f.Body != "" {
+			lines := strings.Split(f.Body, "\n")
+			showLines := len(lines)
+			if showLines > 20 {
+				showLines = 20
+			}
+			fmt.Printf("  函数体 (前 %d / %d 行):\n", showLines, len(lines))
+			for i := 0; i < showLines; i++ {
+				fmt.Printf("    %s\n", lines[i])
+			}
+			if len(lines) > 20 {
+				fmt.Printf("    ... (剩余 %d 行)\n", len(lines)-20)
+			}
+		}
+		fmt.Println()
+	}
+}
+
+// printQueryVars 列出所有全局变量
+func printQueryVars(store *db.Store) {
+	vars, err := store.QueryAllGlobalVars()
+	if err != nil {
+		fatal("查询全局变量失败: %v", err)
+	}
+	fmt.Printf("共 %d 个全局变量:\n\n", len(vars))
+	for _, v := range vars {
+		constStr := "var"
+		if v.IsConst {
+			constStr = "const"
+		}
+		vis := v.Visibility
+		if vis != "" {
+			vis = " " + vis
+		}
+		fmt.Printf("  %s%s %-25s type=%-10s [%s] %s L%d\n",
+			constStr, vis, v.Name, v.VarType, v.Language, v.FilePath, v.LineNum)
+	}
+}
+
+// printQueryDeps 显示调用统计
+func printQueryDeps(store *db.Store) {
+	stats, err := store.QueryDepStats()
+	if err != nil {
+		fatal("查询调用统计失败: %v", err)
+	}
+
+	fmt.Println("╔══════════════════════════════════════════╗")
+	fmt.Println("║      函数调用统计                        ║")
+	fmt.Println("╚══════════════════════════════════════════╝")
+	fmt.Println()
+
+	// 被调用最多的（热点）
+	fmt.Println("  ── 被调用最多的函数 (TOP 10) ──")
+	count := 0
+	for _, s := range stats {
+		if s.CallerCount > 0 {
+			count++
+			if count > 10 {
+				break
+			}
+			fmt.Printf("    %-30s 被 %2d 个函数调用, 内部调用 %3d 次\n",
+				s.FuncName, s.CallerCount, s.TotalCallCount)
+		}
+	}
+	fmt.Println()
+
+	// 从未被调用的
+	fmt.Println("  ── 从未被调用的函数 (死代码候选) ──")
+	deadCount := 0
+	for _, s := range stats {
+		if s.CallerCount == 0 {
+			deadCount++
+		}
+	}
+	fmt.Printf("    共 %d 个函数 (使用 -query dead 查看详情)\n", deadCount)
+	fmt.Println()
+
+	// 调用分支最广的
+	fmt.Println("  ── 调用分支最广的函数 (TOP 5) ──")
+	sort.Slice(stats, func(i, j int) bool {
+		return stats[i].CalleeCount > stats[j].CalleeCount
+	})
+	for i, s := range stats {
+		if i >= 5 || s.CalleeCount == 0 {
+			break
+		}
+		fmt.Printf("    %-30s 调用了 %2d 个不同函数\n", s.FuncName, s.CalleeCount)
+	}
+}
+
+// printQueryCallers 查看谁调用了指定函数
+func printQueryCallers(store *db.Store, funcName string) {
+	callers, err := store.QueryCallers(funcName)
+	if err != nil {
+		fatal("查询调用方失败: %v", err)
+	}
+
+	if len(callers) == 0 {
+		fmt.Printf("没有函数调用 '%s'\n", funcName)
+		return
+	}
+
+	fmt.Printf("调用 '%s' 的函数 (共 %d 个):\n\n", funcName, len(callers))
+	for _, c := range callers {
+		fmt.Printf("  %-30s [%s] %s L%d\n", c.Name, c.Language, c.FilePath, c.LineStart)
+	}
+}
+
+// printQueryDead 列出未被调用的函数
+func printQueryDead(store *db.Store) {
+	funcs, err := store.QueryDeadFunctions()
+	if err != nil {
+		fatal("查询死代码失败: %v", err)
+	}
+
+	fmt.Printf("未被调用的函数 (共 %d 个):\n\n", len(funcs))
+	for _, f := range funcs {
+		fmt.Printf("  %-30s [%s] %s L%d-L%d (%d 行)\n",
+			f.Name, f.Language, f.FilePath, f.LineStart, f.LineEnd, f.LineCount)
+	}
+	if len(funcs) == 0 {
+		fmt.Println("  (无)")
+	}
+}
+
+// printQueryMissing 列出被调用但未定义的函数
+func printQueryMissing(store *db.Store) {
+	missing, err := store.QueryMissingDeps()
+	if err != nil {
+		fatal("查询缺失依赖失败: %v", err)
+	}
+
+	if len(missing) == 0 {
+		fmt.Println("未发现缺失的依赖引用。所有被调用的函数都有定义。")
+		return
+	}
+
+	fmt.Printf("被调用但找不到定义的函数 (共 %d 个):\n\n", len(missing))
+	for _, m := range missing {
+		fmt.Printf("  - %s\n", m)
+	}
+}
+
+// printQueryTop 列出最大的 N 个函数
+func printQueryTop(store *db.Store, n int) {
+	funcs, err := store.QueryTopFunctions(n)
+	if err != nil {
+		fatal("查询最大函数失败: %v", err)
+	}
+
+	fmt.Printf("行数最多的 %d 个函数:\n\n", len(funcs))
+	for i, f := range funcs {
+		fmt.Printf("  #%2d  %-30s [%s] %s L%d-L%d (%d 行, calls=%d, depth=%d)\n",
+			i+1, f.Name, f.Language, f.FilePath, f.LineStart, f.LineEnd, f.LineCount, f.CallCount, f.NestingDepth)
+	}
+}
+
+// printQueryDeep 列出嵌套深度 >= N 的函数
+func printQueryDeep(store *db.Store, threshold int) {
+	funcs, err := store.QueryDeepNesting(threshold)
+	if err != nil {
+		fatal("查询深度嵌套函数失败: %v", err)
+	}
+
+	if len(funcs) == 0 {
+		fmt.Printf("没有嵌套深度 >= %d 的函数\n", threshold)
+		return
+	}
+
+	fmt.Printf("嵌套深度 >= %d 的函数 (共 %d 个):\n\n", threshold, len(funcs))
+	for _, f := range funcs {
+		fmt.Printf("  %-30s depth=%d [%s] %s L%d-L%d (%d 行, calls=%d)\n",
+			f.Name, f.NestingDepth, f.Language, f.FilePath, f.LineStart, f.LineEnd, f.LineCount, f.CallCount)
+	}
 }

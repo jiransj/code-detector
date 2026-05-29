@@ -149,9 +149,9 @@ func (p *CPPParser) Parse(filePath string, content []byte) ([]*model.Function, e
 		braceOffset := -1
 		for j := fs.lineIdx; j < len(lines); j++ {
 			line := lines[j]
-			idx := strings.Index(line, "{")
-			if idx >= 0 && !commentMask[j] {
-				braceOffset = fl.LineOffset( j) + idx
+			idx := findBraceInLine(line)
+			if idx >= 0 && !commentMask[j] && !preprocMask[j] {
+				braceOffset = fl.LineOffset(j) + idx
 				break
 			}
 		}

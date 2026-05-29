@@ -8,7 +8,7 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
-  <img src="https://img.shields.io/badge/version-v0.5-brightgreen.svg" alt="Version v0.5">
+  <img src="https://img.shields.io/badge/version-v0.6-brightgreen.svg" alt="Version v0.6">
   <img src="https://img.shields.io/badge/go-1.26-blue.svg" alt="Go 1.26">
   <img src="https://img.shields.io/badge/platform-windows%20%7C%20linux-lightgrey.svg" alt="Platform">
 </p>
@@ -24,7 +24,7 @@
 从函数角度审查项目的健壮性，函数的合理程度，是否重复造轮子
 排除无关上下文干扰，对code agent具有良好支持辅助作用
 
-当前版本：**v0.5**
+当前版本：**v0.6**
 
 ---
 
@@ -231,6 +231,37 @@ code-detector -lang go,python -verbose D:\projects\myapp
 | `mtime` | 修改时间戳 | 文件最后修改时间的 Unix 时间戳 |
 | `hash` | 文件哈希 | 文件内容的 SHA256 哈希值 |
 | `session_id` | 所属会话 ID | 关联 `scan_sessions.id` |
+
+## 查询模式（`-query`）
+
+**v0.6 新增** — 无需重新扫描，直接读取已有 SQLite 数据库进行分析，支持对扫描结果的离线审计。
+
+```cmd
+code-detector -query <模式> [-db <数据库路径>]
+```
+
+| 模式 | 说明 | 示例 |
+|------|------|------|
+| `summary` | 显示数据库概要（会话数、函数/变量总数、语言分布等） | `-query summary` |
+| `functions` | 列出所有函数（按文件分组，显示行号范围、调用次数） | `-query functions` |
+| `func=NAME` | 查看指定函数的详细信息（依赖、调用方、函数体） | `-query func=main` |
+| `vars` | 列出所有全局变量 | `-query vars` |
+| `deps` | 调用统计：最热函数、死代码候选、调用分支最广的函数 | `-query deps` |
+| `calls=NAME` | 查看哪些函数调用了指定函数 | `-query calls=Parse` |
+| `dead` | 列出 call_count = 0 的潜在死代码 | `-query dead` |
+| `missing` | 列出被调用但找不到定义的函数名（用于发现依赖缺失） | `-query missing` |
+| `top=N` | 列出行数最多的 N 个函数（超大函数风险分析） | `-query top=10` |
+| `deep=N` | 列出嵌套深度 >= N 的函数（复杂度分析） | `-query deep=3` |
+
+例如分析项目最大函数：
+```cmd
+code-detector -query top=5
+```
+
+检查所有可调用依赖是否完整：
+```cmd
+code-detector -query missing
+```
 
 启用 `-graph` 选项时，终端会输出调用关系统计摘要。
 

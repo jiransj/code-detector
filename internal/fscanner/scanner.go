@@ -531,10 +531,12 @@ func isLikelyTextEncoding(content []byte) bool {
 
 // decodeUTF16LE 将 UTF-16 LE 字节序列解码为 UTF-8
 func decodeUTF16LE(data []byte) []byte {
-	// 确保长度为偶数
-	data = bytes.TrimRight(data, "\x00")
-	if len(data)%2 == 1 {
-		data = data[:len(data)-1]
+	// 删除尾部空字节，但确保结果长度为偶数
+	// 注意：不能直接 TrimRight("\x00")，因为 UTF-16LE 中每个 ASCII 字符
+	// 的高字节就是 0x00，TrimRight 会破坏最后一个字符（如 "AB"→[0x41,0x00,0x42,0x00]→[0x41,0x00,0x42] 奇数长）
+	trimmed := bytes.TrimRight(data, "\x00")
+	if len(trimmed)%2 == 0 {
+		data = trimmed
 	}
 
 	var buf bytes.Buffer
@@ -557,9 +559,10 @@ func decodeUTF16LE(data []byte) []byte {
 
 // decodeUTF16BE 将 UTF-16 BE 字节序列解码为 UTF-8
 func decodeUTF16BE(data []byte) []byte {
-	data = bytes.TrimRight(data, "\x00")
-	if len(data)%2 == 1 {
-		data = data[:len(data)-1]
+	// 删除尾部空字节，但确保结果长度为偶数
+	trimmed := bytes.TrimRight(data, "\x00")
+	if len(trimmed)%2 == 0 {
+		data = trimmed
 	}
 
 	var buf bytes.Buffer
