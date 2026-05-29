@@ -1,4 +1,4 @@
-package parser
+﻿package parser
 
 import (
 	"regexp"
@@ -196,7 +196,7 @@ func extractPkgNameForStrategy(lines []string, commentMask []bool, strategy stri
 }
 
 // genericCallRegex 通用函数调用匹配正则
-var genericCallRegex = regexp.MustCompile(`(?:\w+\.)?(\w+)\s*\(`)
+var genericCallRegex = regexp.MustCompile(`(?:(\w+)\.)?(\w+)\s*\(`)
 
 // extractCallsFromBody 从函数体中提取调用（通用模式，委托给 extractCallStatsSimple）
 func extractCallsFromBody(body string) []string {

@@ -344,6 +344,35 @@ func (s *Store) QueryFunctionsByLanguage(lang string) ([]*model.Function, error)
 	return funcs, rows.Err()
 }
 
+// QueryDependenciesBySession 通过 JOIN 一次性查询一个 session 的所有函数依赖关系
+// 返回 map[caller_id][]callee_name — 消除 N+1 查询
+func (s *Store) QueryDependenciesBySession(sessionID int64) (map[int64][]string, error) {
+	rows, err := s.DB.Query(
+		`SELECT d.caller_id, d.callee_name
+		 FROM function_deps d
+		 JOIN functions f ON f.id = d.caller_id
+		 WHERE f.session_id = ?`, sessionID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query deps by session: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[int64][]string)
+	for rows.Next() {
+		var callerID int64
+		var callee string
+		if err := rows.Scan(&callerID, &callee); err != nil {
+			return nil, fmt.Errorf("scan dep row: %w", err)
+		}
+		result[callerID] = append(result[callerID], callee)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 // QueryDependencies 查询指定函数的直接依赖
 func (s *Store) QueryDependencies(funcID int64) ([]string, error) {
 	rows, err := s.DB.Query(
