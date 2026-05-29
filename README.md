@@ -98,6 +98,14 @@ code-detector -graph ./myproject
 code-detector -incremental ./myproject
 ```
 
+**一键扫描（跳过所有测试文件夹）：**
+
+```cmd
+scan.bat
+```
+
+项目根目录下提供了 `scan.bat`，双击即可执行带 `-skip-dirs testdata,testdata_extreme,tests,test,__tests__,node_modules,mock,mocks` 的扫描，自动跳过常见的测试/临时目录，适合日常快速扫描。
+
 **指定输出数据库路径：**
 
 ```cmd
