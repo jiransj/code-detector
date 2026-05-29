@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"code-detector/internal/analyzer"
 	"code-detector/internal/config"
@@ -21,16 +22,26 @@ const version = "0.5"
 // cleanup 退出前需执行的清理（关闭 DB 确保 WAL 回归），main 中初始化，fatal 中调用
 var cleanup func()
 
-// waitForExit 在程序退出前等待用户按键（无论是命令行还是双击启动）
+// waitForExit 在程序退出前等待用户按键（兼容命令行、双击启动、管道输入）
 func waitForExit() {
 	fmt.Print("\n按 Enter 键退出...")
-	// 逐字节读取直到换行，兼容双击启动时的 stdin 状态
+
+	// 尝试读取 stdin（终端模式下会阻塞等待 Enter）
 	var buf [1]byte
+	n, err := os.Stdin.Read(buf[:])
+	if n == 0 || err != nil {
+		// stdin 不可用（双击启动 / 管道 EOF）
+		// 等 3 秒让用户在窗口关闭前看到最终输出
+		time.Sleep(3 * time.Second)
+		return
+	}
+	if buf[0] == '\n' || buf[0] == '\r' {
+		return
+	}
+	// 读到其他字符，继续等到换行
 	for {
-		if _, err := os.Stdin.Read(buf[:]); err != nil {
-			break
-		}
-		if buf[0] == '\n' {
+		os.Stdin.Read(buf[:])
+		if buf[0] == '\n' || buf[0] == '\r' {
 			break
 		}
 	}
