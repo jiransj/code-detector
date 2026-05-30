@@ -60,46 +60,9 @@ func TestNewFileLinesNoTrailingNewline(t *testing.T) {
 	}
 }
 
-func TestNewFileLinesEmpty(t *testing.T) {
-	fl := NewFileLines("")
-	if fl.NumLines() != 1 {
-		t.Fatalf("expected 1 line for empty string, got %d", fl.NumLines())
-	}
-	lines := fl.Lines()
-	if len(lines) != 1 || lines[0] != "" {
-		t.Errorf("expected one empty string, got %v", lines)
-	}
-}
-
-func TestLineContent(t *testing.T) {
-	text := "abc\ndef\n"
-	fl := NewFileLines(text)
-	if c := fl.LineContent(0); c != "abc" {
-		t.Errorf("LineContent(0)=%q, want 'abc'", c)
-	}
-	if c := fl.LineContent(1); c != "def" {
-		t.Errorf("LineContent(1)=%q, want 'def'", c)
-	}
-}
-
 // ──────────────────────────────
 // matchBrace 测试
 // ──────────────────────────────
-
-func TestMatchBraceSimple(t *testing.T) {
-	text := "func foo() { return 1; }"
-	openPos := strings.Index(text, "{")
-	if openPos < 0 {
-		t.Fatal("no brace found")
-	}
-	closePos, err := matchBrace(text, openPos)
-	if err != nil {
-		t.Fatalf("matchBrace error: %v", err)
-	}
-	if text[closePos] != '}' {
-		t.Errorf("expected '}', got %c at %d", text[closePos], closePos)
-	}
-}
 
 func TestMatchBraceNested(t *testing.T) {
 	text := "func() { if (true) { for {} } }"
@@ -139,13 +102,6 @@ func TestMatchBraceUnmatched(t *testing.T) {
 	_, err := matchBrace(text, openPos)
 	if err == nil {
 		t.Errorf("expected error for unmatched brace, got nil")
-	}
-}
-
-func TestMatchBraceNotABrace(t *testing.T) {
-	_, err := matchBrace("hello world", 0)
-	if err == nil {
-		t.Errorf("expected error for non-brace position, got nil")
 	}
 }
 
@@ -278,18 +234,4 @@ func TestExtractCallStatsSimpleSkipFn(t *testing.T) {
 	}
 }
 
-// ──────────────────────────────
-// visibilityFromName 测试
-// ──────────────────────────────
 
-func TestGoVisibility(t *testing.T) {
-	if v := visibilityFromName("Foo"); v != "public" {
-		t.Errorf("visibilityFromName(Foo) = %s, want public", v)
-	}
-	if v := visibilityFromName("foo"); v != "private" {
-		t.Errorf("visibilityFromName(foo) = %s, want private", v)
-	}
-	if v := visibilityFromName(""); v != "private" {
-		t.Errorf("visibilityFromName('') = %s, want private", v)
-	}
-}

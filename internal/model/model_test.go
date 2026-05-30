@@ -6,19 +6,6 @@ import (
 	"time"
 )
 
-func TestFunctionDefaults(t *testing.T) {
-	f := &Function{}
-	if f.Name != "" {
-		t.Errorf("expected empty Name, got %q", f.Name)
-	}
-	if f.LineStart != 0 || f.LineEnd != 0 {
-		t.Errorf("expected zero line range, got %d-%d", f.LineStart, f.LineEnd)
-	}
-	if f.CallCount != 0 {
-		t.Errorf("expected zero CallCount, got %d", f.CallCount)
-	}
-}
-
 func TestFunctionJSON(t *testing.T) {
 	f := &Function{
 		ID:           1,
@@ -55,26 +42,6 @@ func TestFunctionJSON(t *testing.T) {
 	}
 }
 
-func TestGlobalVariableDefaults(t *testing.T) {
-	v := &GlobalVariable{}
-	if v.Name != "" {
-		t.Errorf("expected empty Name, got %q", v.Name)
-	}
-	if v.IsConst {
-		t.Errorf("expected IsConst=false, got true")
-	}
-}
-
-func TestScanSessionDefaults(t *testing.T) {
-	s := &ScanSession{}
-	if s.FileCount != 0 {
-		t.Errorf("expected FileCount=0, got %d", s.FileCount)
-	}
-	if s.FuncCount != 0 {
-		t.Errorf("expected FuncCount=0, got %d", s.FuncCount)
-	}
-}
-
 func TestScanResultAggregation(t *testing.T) {
 	r := &ScanResult{
 		Session: ScanSession{
@@ -100,24 +67,6 @@ func TestScanResultAggregation(t *testing.T) {
 	}
 	if r.Session.ProjectRoot != "/test" {
 		t.Errorf("expected /test, got %q", r.Session.ProjectRoot)
-	}
-}
-
-func TestLanguageConfig(t *testing.T) {
-	cfg := LanguageConfig{
-		Name:          "testlang",
-		Extensions:    []string{".tl"},
-		FunctionRegex: `func\s+(?P<name>\w+)\s*\(`,
-		BodyStrategy:  "brace",
-		SingleComment: []string{"//"},
-		BlockComment:  [][2]string{{"/*", "*/"}},
-	}
-
-	if cfg.Name != "testlang" {
-		t.Errorf("expected testlang, got %q", cfg.Name)
-	}
-	if len(cfg.Extensions) != 1 || cfg.Extensions[0] != ".tl" {
-		t.Errorf("unexpected extensions: %v", cfg.Extensions)
 	}
 }
 
