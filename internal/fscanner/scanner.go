@@ -440,6 +440,19 @@ func (s *Scanner) parseFile(path string) ([]*model.Function, []*model.GlobalVari
 		return nil, nil, nil
 	}
 
+	// 预检文件大小，防止大文件 OOM
+	if fi, statErr := os.Stat(path); statErr == nil {
+		if fi.Size() > s.MaxFileSize {
+			if s.Verbose {
+				fmt.Fprintf(os.Stderr, "warn: 跳过超大文件 %s (%d bytes, max=%d)\n",
+					path, fi.Size(), s.MaxFileSize)
+			}
+			return nil, nil, nil
+		}
+	} else if s.Verbose {
+		fmt.Fprintf(os.Stderr, "warn: stat %s: %v\n", path, statErr)
+	}
+
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return nil, nil, fmt.Errorf("read file: %w", err)
@@ -565,7 +578,7 @@ func isLikelyTextEncoding(content []byte) bool {
 	return true
 }
 
-// decodeUTF16LE 将 UTF-16 LE 字节序列解码为 UTF-8
+// decodeUTF16LE 将 UTF-16 LE 字节序列解码为 UTF-8（含 surrogate pair 支持）
 func decodeUTF16LE(data []byte) []byte {
 	// 删除尾部空字节，但确保结果长度为偶数
 	// 注意：不能直接 TrimRight("\x00")，因为 UTF-16LE 中每个 ASCII 字符
@@ -577,8 +590,23 @@ func decodeUTF16LE(data []byte) []byte {
 
 	var buf bytes.Buffer
 	for i := 0; i+1 < len(data); i += 2 {
-		// 简单处理：只处理 BMP 范围内的字符（基本平面）
 		code := uint16(data[i]) | uint16(data[i+1])<<8
+		// 处理 surrogate pair（高代理 0xD800-0xDBFF）
+		if code >= 0xD800 && code <= 0xDBFF && i+3 < len(data) {
+			low := uint16(data[i+2]) | uint16(data[i+3])<<8
+			if low >= 0xDC00 && low <= 0xDFFF {
+				// 有效 surrogate pair → 解码为 Unicode codepoint
+				r := rune(0x10000 + (uint32(code)-0xD800)<<10 + (uint32(low)-0xDC00))
+				// UTF-8 编码 4 字节 (U+10000~U+10FFFF)
+				buf.WriteByte(0xF0 | byte(r>>18))
+				buf.WriteByte(0x80 | byte((r>>12)&0x3F))
+				buf.WriteByte(0x80 | byte((r>>6)&0x3F))
+				buf.WriteByte(0x80 | byte(r&0x3F))
+				i += 2 // 跳过低代理
+				continue
+			}
+		}
+		// BMP 字符常规 UTF-8 编码
 		if code < 0x80 {
 			buf.WriteByte(byte(code))
 		} else if code < 0x800 {
@@ -593,7 +621,7 @@ func decodeUTF16LE(data []byte) []byte {
 	return buf.Bytes()
 }
 
-// decodeUTF16BE 将 UTF-16 BE 字节序列解码为 UTF-8
+// decodeUTF16BE 将 UTF-16 BE 字节序列解码为 UTF-8（含 surrogate pair 支持）
 func decodeUTF16BE(data []byte) []byte {
 	// 删除尾部空字节，但确保结果长度为偶数
 	trimmed := bytes.TrimRight(data, "\x00")
@@ -604,6 +632,20 @@ func decodeUTF16BE(data []byte) []byte {
 	var buf bytes.Buffer
 	for i := 0; i+1 < len(data); i += 2 {
 		code := uint16(data[i])<<8 | uint16(data[i+1])
+		// 处理 surrogate pair（高代理 0xD800-0xDBFF）
+		if code >= 0xD800 && code <= 0xDBFF && i+3 < len(data) {
+			low := uint16(data[i+2])<<8 | uint16(data[i+3])
+			if low >= 0xDC00 && low <= 0xDFFF {
+				r := rune(0x10000 + (uint32(code)-0xD800)<<10 + (uint32(low)-0xDC00))
+				buf.WriteByte(0xF0 | byte(r>>18))
+				buf.WriteByte(0x80 | byte((r>>12)&0x3F))
+				buf.WriteByte(0x80 | byte((r>>6)&0x3F))
+				buf.WriteByte(0x80 | byte(r&0x3F))
+				i += 2
+				continue
+			}
+		}
+		// BMP 字符常规 UTF-8 编码
 		if code < 0x80 {
 			buf.WriteByte(byte(code))
 		} else if code < 0x800 {

@@ -214,15 +214,6 @@ func tsEachTopLevel(root *sitter.Node, queryStr string, content []byte, fn func(
 	}
 }
 
-// findValueChild 使用 tree-sitter 原生 field "value" 获取变量初始值表达式节点
-// Go grammar: var_spec / const_spec 都有 value: (_)? 字段
-func findValueChild(specNode *sitter.Node) *sitter.Node {
-	if specNode == nil {
-		return nil
-	}
-	return specNode.ChildByFieldName("value")
-}
-
 // inferTypeFromValue 当变量没有显式类型标注时，从 value 节点推断类型
 // 先尝试 AST 节点类型推断，失败后回退到源码文本分析
 func inferTypeFromValue(valueNode *sitter.Node, content []byte) string {
@@ -424,43 +415,6 @@ func tsFirst(root *sitter.Node, queryStr, capName string, content []byte) string
 		}
 	}
 	return ""
-}
-
-// tsFindFuncNode 在已执行的查询游标中找当前函数的完整节点（用于获取行号）
-// 由于 tsEach 已经消耗了游标，我们单独执行一次查询来定位行号
-func tsFindLine(name string, root *sitter.Node, queryStr string, content []byte) (int, int) {
-	q := getCachedQuery(queryStr)
-	if q == nil {
-		return 0, 0
-	}
-	cursor := sitter.NewQueryCursor()
-	if cursor == nil {
-		return 0, 0
-	}
-	defer cursor.Close()
-	cursor.Exec(q, root)
-	for {
-		m, ok := cursor.NextMatch()
-		if !ok {
-			break
-		}
-		var foundName string
-		var funcNode *sitter.Node
-		for _, c := range m.Captures {
-			switch q.CaptureNameForId(c.Index) {
-			case "name":
-				if c.Node != nil {
-					foundName = strings.TrimSpace(c.Node.Content(content))
-				}
-			case "func":
-				funcNode = c.Node
-			}
-		}
-		if foundName == name && funcNode != nil {
-			return int(funcNode.StartPoint().Row) + 1, int(funcNode.EndPoint().Row) + 1
-		}
-	}
-	return 0, 0
 }
 
 // ─── 调用分析 ───────────────────────────────────────
@@ -853,6 +807,4 @@ func tsCountStatements(node *sitter.Node) int {
 	return count
 }
 
-// tsCountParams 已废弃 —— 改用 tree-sitter AST 原生 ChildByFieldName("parameters").NamedChildCount()
-// 保留该函数仅用于兼容外部调用，直接返回 0 表示不应再被使用
-func tsCountParams(params string) int { return 0 }
+

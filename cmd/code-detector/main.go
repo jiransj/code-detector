@@ -184,8 +184,77 @@ func initDB(dbPath string, verbose bool) *db.Store {
 	return db.NewStore(sqlDB)
 }
 
-// initScanner 创建并配置扫描器
-func initScanner(cfg *config.Config, store *db.Store, verbose bool, incremental bool, maxSize int64, workers int, langs string, skipDirs string) *fscanner.Scanner {
+// ScannerOption 扫描器配置函数
+type ScannerOption func(*fscanner.Scanner)
+
+// WithIncremental 启用增量扫描
+func WithIncremental(v bool) ScannerOption {
+	return func(s *fscanner.Scanner) { s.Incremental = v }
+}
+
+// WithMaxSize 设置单文件大小上限
+func WithMaxSize(v int64) ScannerOption {
+	return func(s *fscanner.Scanner) {
+		if v > 0 {
+			s.MaxFileSize = v
+		}
+	}
+}
+
+// WithWorkers 设置并发工作数
+func WithWorkers(v int) ScannerOption {
+	return func(s *fscanner.Scanner) {
+		if v > 0 {
+			s.Workers = v
+		}
+	}
+}
+
+// WithLangFilter 设置语言过滤（逗号分隔）
+func WithLangFilter(langs string, cfg *config.Config, verbose bool) ScannerOption {
+	return func(s *fscanner.Scanner) {
+		if langs == "" {
+			return
+		}
+		langAliases := map[string]string{
+			"py": "python", "js": "javascript", "ts": "typescript",
+			"kt": "kotlin", "cpp": "cpp", "cs": "csharp",
+			"rs": "rust", "rb": "ruby",
+		}
+		for _, lang := range strings.Split(langs, ",") {
+			lang = strings.TrimSpace(lang)
+			if lang == "" {
+				continue
+			}
+			if fullName, ok := langAliases[lang]; ok {
+				lang = fullName
+			}
+			if cfg.GetLanguageByName(lang) != nil {
+				s.LangFilter[lang] = true
+			} else if verbose {
+				fmt.Fprintf(os.Stderr, "warn: 未知语言 '%s'，跳过\n", lang)
+			}
+		}
+	}
+}
+
+// WithSkipDirs 设置额外跳过的目录
+func WithSkipDirs(dirs string) ScannerOption {
+	return func(s *fscanner.Scanner) {
+		if dirs == "" {
+			return
+		}
+		for _, dir := range strings.Split(dirs, ",") {
+			dir = strings.TrimSpace(dir)
+			if dir != "" {
+				s.SkipDirs[dir] = true
+			}
+		}
+	}
+}
+
+// initScanner 创建并配置扫描器，verbose 为必选参数（用于运行时输出控制）
+func initScanner(cfg *config.Config, store *db.Store, verbose bool, opts ...ScannerOption) *fscanner.Scanner {
 	reg := parser.NewRegistry()
 	for _, pr := range parser.DefaultParsers() {
 		reg.Register(pr.Parser, pr.Extensions...)
@@ -210,43 +279,9 @@ func initScanner(cfg *config.Config, store *db.Store, verbose bool, incremental 
 
 	scan := fscanner.New(cfg, reg, store)
 	scan.Verbose = verbose
-	scan.Incremental = incremental
-	if maxSize > 0 {
-		scan.MaxFileSize = maxSize
-	}
-	if workers > 0 {
-		scan.Workers = workers
-	}
-
-	langAliases := map[string]string{
-		"py": "python", "js": "javascript", "ts": "typescript",
-		"kt": "kotlin", "cpp": "cpp", "cs": "csharp",
-		"rs": "rust", "rb": "ruby",
-	}
-	if langs != "" {
-		for _, lang := range strings.Split(langs, ",") {
-			lang = strings.TrimSpace(lang)
-			if lang == "" {
-				continue
-			}
-			if fullName, ok := langAliases[lang]; ok {
-				lang = fullName
-			}
-			if cfg.GetLanguageByName(lang) != nil {
-				scan.LangFilter[lang] = true
-			} else if verbose {
-				fmt.Fprintf(os.Stderr, "warn: 未知语言 '%s'，跳过\n", lang)
-			}
-		}
-	}
-
-	if skipDirs != "" {
-		for _, dir := range strings.Split(skipDirs, ",") {
-			dir = strings.TrimSpace(dir)
-			if dir != "" {
-				scan.SkipDirs[dir] = true
-			}
-		}
+	// 应用可选配置
+	for _, opt := range opts {
+		opt(scan)
 	}
 	return scan
 }
@@ -427,7 +462,13 @@ func main() {
 			verbose = true
 		}
 	}
-	scan := initScanner(cfg, store, verbose, incremental, maxSize, workers, langs, skipDirs)
+	scan := initScanner(cfg, store, verbose,
+		WithIncremental(incremental),
+		WithMaxSize(maxSize),
+		WithWorkers(workers),
+		WithLangFilter(langs, cfg, verbose),
+		WithSkipDirs(skipDirs),
+	)
 
 	printBanner(projectRoot, dbPath, scan, cfg, verbose)
 
@@ -1158,7 +1199,7 @@ func printQueryDead(store *db.Store) {
 	}
 }
 
-// printQueryMissing 列出被调用但未定义的函数
+// printQueryMissing 列出被调用但未定义的函数（过滤标准库）
 func printQueryMissing(store *db.Store) {
 	missing, err := store.QueryMissing()
 	if err != nil {
@@ -1169,13 +1210,78 @@ func printQueryMissing(store *db.Store) {
 		return
 	}
 
-	if len(missing) == 0 {
-		fmt.Println("未发现缺失的依赖引用。所有被调用的函数都有定义。")
+	// 标准库包前缀（以点分隔或直接出现的库名前缀）
+	stdLibPrefixes := []string{
+		"fmt.", "os.", "strings.", "bytes.", "time.", "sync.", "sort.",
+		"regexp.", "flag.", "strconv.", "io.", "math.", "path.", "filepath.",
+		"unicode.", "encoding.", "database/", "context.", "hash.", "log.",
+		"net.", "http.", "crypto.", "json.", "xml.", "bufio.", "embed.",
+		"errors.", "reflect.", "runtime.", "syscall.", "testing.",
+	}
+	knownCalls := []string{
+		"Print", "Printf", "Println", "Fprintf", "Sprintf", "Sscanf",
+		"Sprint", "Sprintln", "Errorf", "Fprint", "Fprintln",
+		"Open", "Read", "Write", "Close", "Stat", "ReadFile", "WriteFile",
+		"ReadDir", "Mkdir", "MkdirAll", "Remove", "RemoveAll", "Rename",
+		"Chdir", "Chmod", "Getwd", "TempDir", "Executable", "Exit",
+		"IsNotExist", "IsExist", "SameFile", "Stdin", "Stdout", "Stderr",
+		"Split", "Join", "Contains", "HasPrefix", "HasSuffix", "Replace",
+		"ReplaceAll", "Trim", "TrimSpace", "TrimRight", "TrimLeft", "TrimPrefix",
+		"ToLower", "ToUpper", "Index", "IndexByte", "LastIndex", "Count",
+		"Atoi", "Itoa", "ParseInt", "ParseFloat", "FormatInt", "ParseBool",
+		"NewBuffer", "NewReader", "Buffer", "Bytes", "Grow", "WriteByte", "WriteString",
+		"Sleep", "Since", "Now", "Duration", "Second", "Millisecond",
+		"Wait", "Add", "Done", "NewWaitGroup",
+		"Lock", "Unlock", "RWMutex", "Mutex", "Once", "Pool",
+		"Slice", "Strings", "Float64s", "Search", "SearchStrings",
+		"MustCompile", "Compile", "FindAllStringSubmatch", "FindStringSubmatchIndex",
+		"StringVar", "BoolVar", "Int64Var", "IntVar", "Arg", "NArg", "Parse",
+		"Append", "Cap", "Len", "Make", "New", "Copy", "Delete", "Close",
+		"Error", "Err", "NewError",
+		"QueryRow", "Query", "Exec", "Prepare", "Scan", "Rows", "Stmt", "Tx",
+		"Valid", "IsLetter", "IsUpper", "IsDigit", "IsSpace",
+		"NewScanner", "NewDelimiter", "NewEncoder", "NewDecoder",
+		"Marshal", "Unmarshal", "MarshalIndent", "NewDecoder", "NewEncoder",
+		"New128a", "New128", "New64", "New64a", "Sum", "Write",
+		"New", "Println", "Fatal", "Fatalf", "Logf", "Log", "Fail", "FailNow",
+		"Run", "Helper", "Short",
+		"Background", "TODO", "WithCancel", "WithTimeout", "WithDeadline",
+		"Listen", "Dial", "Accept", "Handler", "HandleFunc", "Serve",
+		"Rel", "Dir", "Base", "Ext", "Abs", "ToSlash", "WalkDir",
+		"SetErrorLogger", "NewQuery", "NewQueryCursor", "Exec", "NextMatch",
+		"CaptureNameForId", "RootNode", "NamedChildCount", "ChildByFieldName",
+		"Content", "StartPoint", "EndPoint", "Child", "ChildCount", "Type",
+		"Parent", "Slice",
+	}
+
+	isStdLib := func(name string) bool {
+		for _, p := range stdLibPrefixes {
+			if len(name) > len(p) && name[:len(p)] == p {
+				return true
+			}
+		}
+		for _, c := range knownCalls {
+			if name == c {
+				return true
+			}
+		}
+		return false
+	}
+
+	var projectMissing []string
+	for _, m := range missing {
+		if !isStdLib(m) {
+			projectMissing = append(projectMissing, m)
+		}
+	}
+
+	if len(projectMissing) == 0 {
+		fmt.Println("未发现项目内缺失的依赖引用。（标准库调用已过滤）")
 		return
 	}
 
-	fmt.Printf("被调用但找不到定义的函数 (共 %d 个):\n\n", len(missing))
-	for _, m := range missing {
+	fmt.Printf("被调用但找不到定义的函数 (共 %d 个，已过滤 %d 个标准库):\n\n", len(projectMissing), len(missing)-len(projectMissing))
+	for _, m := range projectMissing {
 		fmt.Printf("  - %s\n", m)
 	}
 }

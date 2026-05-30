@@ -199,8 +199,4 @@ var genericCallRegex = regexp.MustCompile(`(?:(\w+)\.)?(\w+)\s*\(`)
 // genericPkgRegex 通用包名/命名空间匹配正则
 var genericPkgRegex = regexp.MustCompile(`^\s*(?:package|namespace)\s+(?P<name>\w+)`)
 
-// extractCallsFromBody 从函数体中提取调用（通用模式，委托给 extractCallStatsSimple）
-func extractCallsFromBody(body string) []string {
-	stats := extractCallStatsSimple(body, genericCallRegex, func(string) bool { return false })
-	return stats.Callees
-}
+

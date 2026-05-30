@@ -45,11 +45,6 @@ func (r *Registry) GetByExt(ext string) Parser {
 	return r.extToParser[ext]
 }
 
-// GetByLang 按语言名称获取解析器
-func (r *Registry) GetByLang(lang string) Parser {
-	return r.langToParser[lang]
-}
-
 // SupportedExts 返回所有支持的扩展名列表
 func (r *Registry) SupportedExts() []string {
 	exts := make([]string, 0, len(r.extToParser))

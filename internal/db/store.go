@@ -13,12 +13,17 @@ import (
 )
 
 // Store 封装所有数据库 CRUD 操作
+//
+// ⚠️ 锁获取定序（必须遵守，否则可能死锁）：
+//   sessionMu → funcMu → depsMu → globalVarMu
+// 任何需要持有多个锁的代码必须以该顺序获取
+//
 type Store struct {
 	DB          *sql.DB
-	sessionMu   sync.Mutex // 保护会话创建/更新/清理
-	funcMu      sync.Mutex // 保护函数批量写入
-	depsMu      sync.Mutex // 保护依赖关系批量写入
-	globalVarMu sync.Mutex // 保护全局变量批量写入
+	sessionMu   sync.Mutex // [1] 保护会话创建/更新/清理
+	funcMu      sync.Mutex // [2] 保护函数批量写入
+	depsMu      sync.Mutex // [3] 保护依赖关系批量写入
+	globalVarMu sync.Mutex // [4] 保护全局变量批量写入
 
 	// 缓存预处理语句，避免每次批次重新 prepare
 	funcInsertStmt      *sql.Stmt
@@ -136,22 +141,6 @@ func (s *Store) UpdateSession(sessionID int64, duration time.Duration, fileCount
 }
 
 // InsertFunction 插入一条函数记录，返回函数 ID
-func (s *Store) InsertFunction(f *model.Function, sessionID int64) (int64, error) {
-	res, err := s.DB.Exec(
-		`INSERT INTO functions (session_id, name, package_name, language, file_path, line_start, line_end, body, call_count, nesting_depth,
-		                        parameters, return_types, receiver, is_method, visibility, cyclomatic, parameter_count, return_count, statement_count, anonymous_funcs)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-		         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		sessionID, f.Name, f.PackageName, f.Language, f.FilePath, f.LineStart, f.LineEnd, f.Body, f.CallCount, f.NestingDepth,
-		f.Parameters, f.ReturnTypes, f.Receiver, boolToInt(f.IsMethod), f.Visibility,
-		f.Cyclomatic, f.ParameterCount, f.ReturnCount, f.StatementCount, f.AnonymousFuncs,
-	)
-	if err != nil {
-		return 0, fmt.Errorf("insert function: %w", err)
-	}
-	return res.LastInsertId()
-}
-
 // FuncHash 计算函数的唯一哈希值
 func FuncHash(f *model.Function) string {
 	sort.Strings(f.Dependencies)
@@ -477,29 +466,6 @@ func (s *Store) QueryCallers(funcName string) ([]*model.Function, error) {
 		funcs = append(funcs, f)
 	}
 	return funcs, rows.Err()
-}
-
-// QueryAllSessions 查询所有扫描会话
-func (s *Store) QueryAllSessions() ([]*model.ScanSession, error) {
-	rows, err := s.DB.Query(
-		`SELECT id, project_root, scan_time, duration_ms, file_count, func_count
-		 FROM scan_sessions ORDER BY scan_time DESC`,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var sessions []*model.ScanSession
-	for rows.Next() {
-		ss := &model.ScanSession{}
-		if err := rows.Scan(&ss.ID, &ss.ProjectRoot, &ss.ScanTime,
-			&ss.Duration, &ss.FileCount, &ss.FuncCount); err != nil {
-			return nil, err
-		}
-		sessions = append(sessions, ss)
-	}
-	return sessions, rows.Err()
 }
 
 // BatchInsertGlobalVars 批量插入全局变量（事务内）

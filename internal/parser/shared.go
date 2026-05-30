@@ -66,43 +66,7 @@ func makeCommentMask(lines []string, singleComments []string, blockComments [][2
 	return mask
 }
 
-func makeStringMask(lines []string) []bool {
-	mask := make([]bool, len(lines))
-	inRaw := false
-	inInterp := false
-	for i, line := range lines {
-		if inRaw {
-			mask[i] = true
-			if strings.Contains(line, "`") {
-				inRaw = false
-			}
-			continue
-		}
-		if inInterp {
-			mask[i] = true
-			if strings.Contains(line, "\"") {
-				inInterp = false
-			}
-			continue
-		}
-		if strings.Contains(line, "`") {
-			mask[i] = true
-			if !strings.HasSuffix(strings.TrimSpace(line), "`") {
-				inRaw = true
-			}
-		}
-		if strings.Contains(line, "\"") && !mask[i] {
-			mask[i] = true
-			if !strings.HasSuffix(strings.TrimSpace(line), "\"") {
-				inInterp = true
-			}
-		}
-	}
-	return mask
-}
-
-// makeMasks 合并 makeCommentMask + makeStringMask 为单趟扫描
-// 减少对 lines 的完整遍历次数：从 2 次降为 1 次
+// makeMasks 单趟扫描同时对注释和字符串行做掩码（按字符状态机，正确处理转义符）
 func makeMasks(lines []string, singleComments []string, blockComments [][2]string) (commentMask, stringMask []bool) {
 	commentMask = make([]bool, len(lines))
 	stringMask = make([]bool, len(lines))
@@ -141,28 +105,88 @@ func makeMasks(lines []string, singleComments []string, blockComments [][2]strin
 			}
 		}
 
-		// ── 字符串检测 ──
+		// ── 字符串检测（按字符状态机，正确处理转义） ──
 		if inRaw {
 			stringMask[i] = true
-			if strings.Contains(line, "`") {
-				inRaw = false
+			// 逐字符扫描反引号结束
+			for j := 0; j < len(line); j++ {
+				if line[j] == '`' {
+					inRaw = false
+					break
+				}
 			}
 		} else if inInterp {
 			stringMask[i] = true
-			if strings.Contains(line, "\"") {
-				inInterp = false
-			}
-		} else {
-			if strings.Contains(line, "`") {
-				stringMask[i] = true
-				if !strings.HasSuffix(strings.TrimSpace(line), "`") {
-					inRaw = true
+			// 逐字符扫描，处理 \" 转义
+			escaped := false
+			for j := 0; j < len(line); j++ {
+				if escaped {
+					escaped = false
+					continue
+				}
+				if line[j] == '\\' {
+					escaped = true
+					continue
+				}
+				if line[j] == '"' {
+					inInterp = false
+					break
 				}
 			}
-			if strings.Contains(line, "\"") && !stringMask[i] {
-				stringMask[i] = true
-				if !strings.HasSuffix(strings.TrimSpace(line), "\"") {
-					inInterp = true
+		} else {
+			// 不处于任何字符串中 → 逐字符扫描检测字符串开启
+			escaped := false
+			for j := 0; j < len(line); j++ {
+				if escaped {
+					escaped = false
+					continue
+				}
+				ch := line[j]
+				if ch == '\\' {
+					escaped = true
+					continue
+				}
+				if ch == '`' {
+					stringMask[i] = true
+					// 反引号开/关切换：若本行之后还有 ` 则已关闭
+					remain := line[j+1:]
+					if idx := strings.IndexByte(remain, '`'); idx >= 0 {
+						j += idx + 1 // 跳过闭合的反引号
+					} else {
+						inRaw = true // 未闭合 → 跨行
+						break
+					}
+					continue
+				}
+				if ch == '"' && !commentMask[i] {
+					stringMask[i] = true
+					// 双引号开/关切换（处理 \" 转义）
+					remain := line[j+1:]
+					idx := strings.IndexByte(remain, '"')
+					for idx >= 0 && idx > 0 && remain[idx-1] == '\\' {
+						// 检查是否是真正的转义 \\" vs \"
+						bsCount := 0
+						for k := idx - 1; k >= 0 && remain[k] == '\\'; k-- {
+							bsCount++
+						}
+						if bsCount%2 == 1 { // 奇数反斜杠 → 转义引号
+							next := strings.IndexByte(remain[idx+1:], '"')
+							if next < 0 {
+								idx = -1
+							} else {
+								idx = idx + 1 + next
+							}
+						} else {
+							break // 偶数反斜杠 → 真正的引号结束
+						}
+					}
+					if idx >= 0 {
+						j += idx + 1
+					} else {
+						inInterp = true
+						break
+					}
+					continue
 				}
 			}
 		}
