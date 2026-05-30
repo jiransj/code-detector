@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	sitter "github.com/smacker/go-tree-sitter"
 	"github.com/smacker/go-tree-sitter/golang"
@@ -20,7 +21,53 @@ func (p *TreeSitterGoParser) Language() string   { return "go" }
 
 var tsCtx = context.Background()
 
-// 树-sitter 查询（每次调用时编译，避免并发问题）
+// 缓存预编译的 tree-sitter 查询，避免每次 Parse 重复 CGo 分配
+var (
+	cachedQFmtDecl    *sitter.Query
+	cachedQMethodDecl *sitter.Query
+	cachedQCall       *sitter.Query
+	cachedQSelCall    *sitter.Query
+	cachedQPkg        *sitter.Query
+	cachedQVar        *sitter.Query
+	cachedQConst      *sitter.Query
+)
+
+var initQueriesOnce sync.Once
+
+func initQueries() {
+	lang := golang.GetLanguage()
+	cachedQFmtDecl, _ = sitter.NewQuery([]byte(qFuncDecl), lang)
+	cachedQMethodDecl, _ = sitter.NewQuery([]byte(qMethodDecl), lang)
+	cachedQCall, _ = sitter.NewQuery([]byte(qCall), lang)
+	cachedQSelCall, _ = sitter.NewQuery([]byte(qSelCall), lang)
+	cachedQPkg, _ = sitter.NewQuery([]byte(qPkg), lang)
+	cachedQVar, _ = sitter.NewQuery([]byte(qVar), lang)
+	cachedQConst, _ = sitter.NewQuery([]byte(qConst), lang)
+}
+
+// getCachedQuery 根据查询字符串返回缓存的 Query 对象
+func getCachedQuery(queryStr string) *sitter.Query {
+	initQueriesOnce.Do(initQueries)
+	switch queryStr {
+	case qFuncDecl:
+		return cachedQFmtDecl
+	case qMethodDecl:
+		return cachedQMethodDecl
+	case qCall:
+		return cachedQCall
+	case qSelCall:
+		return cachedQSelCall
+	case qPkg:
+		return cachedQPkg
+	case qVar:
+		return cachedQVar
+	case qConst:
+		return cachedQConst
+	}
+	return nil
+}
+
+// 树-sitter 查询字符串
 const (
 	qFuncDecl   = `(function_declaration name: (identifier) @name body: (block) @body) @func`
 	qMethodDecl = `(method_declaration name: (field_identifier) @name body: (block) @body) @func`
@@ -95,12 +142,10 @@ func visibilityFromName(name string) string {
 
 // tsEachTopLevel 只匹配 source_file 直接子级的 var/const 声明（排除局部变量）
 func tsEachTopLevel(root *sitter.Node, queryStr string, content []byte, fn func(name, typeStr string)) {
-	lang := golang.GetLanguage()
-	q, err := sitter.NewQuery([]byte(queryStr), lang)
-	if err != nil || q == nil {
+	q := getCachedQuery(queryStr)
+	if q == nil {
 		return
 	}
-	defer q.Close()
 
 	cursor := sitter.NewQueryCursor()
 	if cursor == nil {
@@ -159,12 +204,10 @@ func tsParseRoot(content []byte) (*sitter.Node, *sitter.Language, error) {
 }
 
 func tsEach(root *sitter.Node, queryStr string, content []byte, fn func(name, body, fullText string)) {
-	lang := golang.GetLanguage()
-	q, err := sitter.NewQuery([]byte(queryStr), lang)
-	if err != nil || q == nil {
+	q := getCachedQuery(queryStr)
+	if q == nil {
 		return
 	}
-	defer q.Close()
 
 	cursor := sitter.NewQueryCursor()
 	if cursor == nil {
@@ -203,12 +246,10 @@ func tsEach(root *sitter.Node, queryStr string, content []byte, fn func(name, bo
 }
 
 func tsFirst(root *sitter.Node, queryStr, capName string, content []byte) string {
-	lang := golang.GetLanguage()
-	q, err := sitter.NewQuery([]byte(queryStr), lang)
-	if err != nil || q == nil {
+	q := getCachedQuery(queryStr)
+	if q == nil {
 		return ""
 	}
-	defer q.Close()
 	cursor := sitter.NewQueryCursor()
 	if cursor == nil {
 		return ""
