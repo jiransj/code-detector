@@ -21,6 +21,18 @@ func (p *TreeSitterGoParser) Language() string   { return "go" }
 
 var tsCtx = context.Background()
 
+// parserPool 复用 sitter.Parser 对象，避免每次解析重复 CGo 分配与销毁
+var parserPool = sync.Pool{
+	New: func() interface{} {
+		p := sitter.NewParser()
+		if p == nil {
+			return nil
+		}
+		p.SetLanguage(golang.GetLanguage())
+		return p
+	},
+}
+
 // 缓存预编译的 tree-sitter 查询，避免每次 Parse 重复 CGo 分配
 var (
 	cachedQFmtDecl    *sitter.Query
@@ -185,12 +197,12 @@ func tsEachTopLevel(root *sitter.Node, queryStr string, content []byte, fn func(
 // ─── 树操作 ──────────────────────────────────────────
 
 func tsParseRoot(content []byte) (*sitter.Node, *sitter.Language, error) {
-	p := sitter.NewParser()
+	p := parserPool.Get().(*sitter.Parser)
 	if p == nil {
 		return nil, nil, fmt.Errorf("NewParser failed")
 	}
-	lang := golang.GetLanguage()
-	p.SetLanguage(lang)
+	defer parserPool.Put(p)
+
 	tree, err := p.ParseCtx(tsCtx, nil, content)
 	if err != nil || tree == nil {
 		return nil, nil, fmt.Errorf("parse: %v", err)
@@ -200,7 +212,7 @@ func tsParseRoot(content []byte) (*sitter.Node, *sitter.Language, error) {
 		tree.Close()
 		return nil, nil, fmt.Errorf("nil root")
 	}
-	return root, lang, nil
+	return root, golang.GetLanguage(), nil
 }
 
 func tsEach(root *sitter.Node, queryStr string, content []byte, fn func(name, body, fullText string)) {
