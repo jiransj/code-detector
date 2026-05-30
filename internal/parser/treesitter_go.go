@@ -188,9 +188,10 @@ func tsEachTopLevel(root *sitter.Node, queryStr string, content []byte, fn func(
 				isTopLevel = parent != nil && parent.Type() == "source_file"
 			case "name":
 				// 从 name 节点的父节点（var_spec / const_spec）查找 value 子节点
+				// 使用 tree-sitter 原生 field "value" 直接定位
 				var valueNode *sitter.Node
 				if parentSpec := c.Node.Parent(); parentSpec != nil {
-					valueNode = findValueChild(parentSpec)
+					valueNode = parentSpec.ChildByFieldName("value")
 				}
 				pairs = append(pairs, quad{
 					name:      strings.TrimSpace(c.Node.Content(content)),
@@ -213,39 +214,13 @@ func tsEachTopLevel(root *sitter.Node, queryStr string, content []byte, fn func(
 	}
 }
 
-// findValueChild 在 var_spec / const_spec 节点的子节点中查找 value 表达式
-// 遍历所有子节点，返回最后一个非 name/type 的节点
+// findValueChild 使用 tree-sitter 原生 field "value" 获取变量初始值表达式节点
+// Go grammar: var_spec / const_spec 都有 value: (_)? 字段
 func findValueChild(specNode *sitter.Node) *sitter.Node {
-	if specNode == nil || specNode.ChildCount() == 0 {
+	if specNode == nil {
 		return nil
 	}
-	var lastExpr *sitter.Node
-	for i := 0; i < int(specNode.ChildCount()); i++ {
-		child := specNode.Child(i)
-		if child == nil {
-			continue
-		}
-		ct := child.Type()
-		// 跳过 name (identifier)
-		if ct == "identifier" || ct == "field_identifier" {
-			continue
-		}
-		// 跳过标点符号
-		if ct == "=" || ct == "," || ct == ";" {
-			continue
-		}
-		// 跳过类型节点
-		switch ct {
-		case "qualified_type", "pointer_type", "type_identifier",
-			"generic_type", "array_type", "slice_type",
-			"map_type", "channel_type", "struct_type",
-			"interface_type", "function_type", "named_type":
-			continue
-		}
-		// 其余节点视为 value 表达式（如 interpreted_string_literal 等）
-		lastExpr = child
-	}
-	return lastExpr
+	return specNode.ChildByFieldName("value")
 }
 
 // inferTypeFromValue 当变量没有显式类型标注时，从 value 节点推断类型
@@ -331,39 +306,21 @@ func inferTypeFromValue(valueNode *sitter.Node, content []byte) string {
 	case "nil":
 		return "untyped nil"
 	case "composite_literal":
-		for i := 0; i < int(n.ChildCount()); i++ {
-			child := n.Child(i)
-			if child == nil {
-				continue
-			}
-			ct := child.Type()
-			if ct == "{" || ct == "}" || ct == "literal_value" {
-				continue
-			}
-			return child.Content(content)
+		// 使用 tree-sitter 原生 field "type" 获取复合字面量的类型名
+		if typeNode := n.ChildByFieldName("type"); typeNode != nil {
+			return typeNode.Content(content)
 		}
 		return ""
 	case "call_expression":
-		for i := 0; i < int(n.ChildCount()); i++ {
-			child := n.Child(i)
-			if child == nil {
-				continue
-			}
-			if child.Type() == "identifier" || child.Type() == "selector_expression" {
-				return child.Content(content)
-			}
+		// 使用 tree-sitter 原生 field "function" 获取函数名
+		if funcNode := n.ChildByFieldName("function"); funcNode != nil {
+			return funcNode.Content(content)
 		}
 		return ""
 	case "type_conversion_expression":
-		for i := 0; i < int(n.ChildCount()); i++ {
-			child := n.Child(i)
-			if child == nil {
-				continue
-			}
-			ct := child.Type()
-			if ct != "(" && ct != ")" && ct != "argument_list" {
-				return child.Content(content)
-			}
+		// 使用 tree-sitter 原生 field "type" 获取转换目标类型
+		if typeNode := n.ChildByFieldName("type"); typeNode != nil {
+			return typeNode.Content(content)
 		}
 		return ""
 	case "unary_expression":
