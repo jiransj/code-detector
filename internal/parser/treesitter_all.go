@@ -10,9 +10,14 @@ import (
 	tscsharp "github.com/smacker/go-tree-sitter/csharp"
 	tsjava "github.com/smacker/go-tree-sitter/java"
 	tsjavascript "github.com/smacker/go-tree-sitter/javascript"
+	tskotlin "github.com/smacker/go-tree-sitter/kotlin"
+	tslua "github.com/smacker/go-tree-sitter/lua"
+	tsphp "github.com/smacker/go-tree-sitter/php"
 	tspython "github.com/smacker/go-tree-sitter/python"
 	tsruby "github.com/smacker/go-tree-sitter/ruby"
 	tsrust "github.com/smacker/go-tree-sitter/rust"
+	tsscala "github.com/smacker/go-tree-sitter/scala"
+	tsswift "github.com/smacker/go-tree-sitter/swift"
 	tstypescript "github.com/smacker/go-tree-sitter/typescript/typescript"
 	tstypescriptTsx "github.com/smacker/go-tree-sitter/typescript/tsx"
 
@@ -113,6 +118,40 @@ var tsLangRegistry = []tsLangDef{
 		CallQuery:  `(call_expression function: (identifier) @callee) @call`,
 		SelCallQuery: `(call_expression function: (member_expression property: (property_identifier) @callee)) @call`,
 	},
+	{
+		Name: "swift", Extensions: []string{".swift"},
+		GetLang:    swiftGetLang,
+		FuncQuery:  `(function_declaration name: (simple_identifier) @name body: (function_body) @body) @func`,
+		CallQuery:  `(call_expression function: (simple_identifier) @callee) @call`,
+		SelCallQuery: `(call_expression function: (member_access_expression member: (simple_identifier) @callee)) @call`,
+	},
+	{
+		Name: "kotlin", Extensions: []string{".kt", ".kts"},
+		GetLang:    kotlinGetLang,
+		FuncQuery:  `(function_declaration name: (simple_identifier) @name body: (function_body) @body) @func`,
+		CallQuery:  `(call_expression function: (simple_identifier) @callee) @call`,
+		SelCallQuery: `(call_expression function: (navigation_expression navigation_suffix: (simple_identifier) @callee)) @call`,
+	},
+	{
+		Name: "php", Extensions: []string{".php"},
+		GetLang:    phpGetLang,
+		FuncQuery:  `(function_definition name: (name) @name body: (body) @body) @func`,
+		CallQuery:  `(function_call_expression function: (name) @callee) @call`,
+	},
+	{
+		Name: "lua", Extensions: []string{".lua"},
+		GetLang:    luaGetLang,
+		FuncQuery:  `(function_declaration name: (identifier) @name body: (block) @body) @func`,
+		CallQuery:  `(function_call function: (identifier) @callee) @call`,
+		SelCallQuery: `(function_call function: (dot_index_expression field: (identifier) @callee)) @call`,
+	},
+	{
+		Name: "scala", Extensions: []string{".scala"},
+		GetLang:    scalaGetLang,
+		FuncQuery:  `(function_definition name: (identifier) @name body: (block) @body) @func`,
+		CallQuery:  `(call_expression function: (identifier) @callee) @call`,
+		SelCallQuery: `(call_expression function: (selector_expression member: (identifier) @callee)) @call`,
+	},
 }
 
 // 各语言的 GetLang 包装函数
@@ -125,6 +164,11 @@ func rubyGetLang() *sitter.Language  { return tsruby.GetLanguage() }
 func csGetLang() *sitter.Language    { return tscsharp.GetLanguage() }
 func tsGetLang() *sitter.Language    { return tstypescript.GetLanguage() }
 func tsxGetLang() *sitter.Language   { return tstypescriptTsx.GetLanguage() }
+func swiftGetLang() *sitter.Language  { return tsswift.GetLanguage() }
+func kotlinGetLang() *sitter.Language { return tskotlin.GetLanguage() }
+func phpGetLang() *sitter.Language   { return tsphp.GetLanguage() }
+func luaGetLang() *sitter.Language   { return tslua.GetLanguage() }
+func scalaGetLang() *sitter.Language { return tsscala.GetLanguage() }
 
 // getLangExt 通过扩展名查找语言定义
 func getLangDef(ext string) *tsLangDef {

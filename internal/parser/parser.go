@@ -77,7 +77,10 @@ func DefaultParsers() []ParserRegistration {
 		{NewTreeSitterParser(".rs"), []string{".rs"}},
 		{NewTreeSitterParser(".rb"), []string{".rb"}},
 		{NewTreeSitterParser(".ts"), []string{".ts", ".tsx"}},
-		// 仅 Kotlin 没有 tree-sitter grammar，保留旧解析器
-		{NewKotlinParser(), []string{".kt", ".kts"}},
+		{NewTreeSitterParser(".swift"), []string{".swift"}},
+		{NewTreeSitterParser(".kt"), []string{".kt", ".kts"}},
+		{NewTreeSitterParser(".php"), []string{".php"}},
+		{NewTreeSitterParser(".lua"), []string{".lua"}},
+		{NewTreeSitterParser(".scala"), []string{".scala"}},
 	}
 }
