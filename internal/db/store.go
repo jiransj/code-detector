@@ -152,15 +152,6 @@ func (s *Store) InsertFunction(f *model.Function, sessionID int64) (int64, error
 	return res.LastInsertId()
 }
 
-// InsertDependency 插入一条函数依赖关系
-func (s *Store) InsertDependency(callerID int64, calleeName string) error {
-	_, err := s.DB.Exec(
-		`INSERT INTO function_deps (caller_id, callee_name) VALUES (?, ?)`,
-		callerID, calleeName,
-	)
-	return err
-}
-
 // FuncHash 计算函数的唯一哈希值
 func FuncHash(f *model.Function) string {
 	sort.Strings(f.Dependencies)
@@ -642,12 +633,6 @@ func (s *Store) UpsertFileCache(filePath string, mtime int64, hash string, sessi
 		return fmt.Errorf("upsert file cache: %w", err)
 	}
 	return nil
-}
-
-// ClearFileCache 清理指定 session 之前的缓存（全量扫描后使用）
-func (s *Store) ClearFileCache(sessionID int64) error {
-	_, err := s.DB.Exec(`DELETE FROM file_cache WHERE session_id < ?`, sessionID)
-	return err
 }
 
 // Checkpoint 将 WAL 内容回写到主数据库文件

@@ -3,6 +3,7 @@ package analyzer
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"code-detector/internal/db"
 	"code-detector/internal/model"
@@ -22,10 +23,12 @@ func New(store *db.Store) *Analyzer {
 type CallGraph struct {
 	// Nodes 按限定名索引: "pkg.Name" 或 "Name"（无包名时）
 	Nodes map[string]*FuncNode
-	// IDIndex 按函数 ID 索引
+	// IDIndex 按函数 ID 索引（保证所有节点不遗漏）
 	IDIndex map[int64]*FuncNode
 	// plainNameIndex 按普通函数名索引（用于依赖匹配回退）
 	plainNameIndex map[string][]*FuncNode
+	// qualifiedIndex 按限定名索引，支持同名函数多个节点（如多文件同名方法）
+	qualifiedIndex map[string][]*FuncNode
 }
 
 // FuncNode 调用图节点
@@ -60,6 +63,7 @@ func (a *Analyzer) BuildCallGraph(sessionID int64) (*CallGraph, error) {
 		Nodes:          make(map[string]*FuncNode),
 		IDIndex:        make(map[int64]*FuncNode),
 		plainNameIndex: make(map[string][]*FuncNode),
+		qualifiedIndex: make(map[string][]*FuncNode),
 	}
 	// 按包名 + 函数名二次索引，用于同包优先匹配
 	type pkgKey struct{ pkg, name string }
@@ -81,6 +85,7 @@ func (a *Analyzer) BuildCallGraph(sessionID int64) (*CallGraph, error) {
 		}
 		graph.Nodes[qn] = node
 		graph.IDIndex[f.ID] = node
+		graph.qualifiedIndex[qn] = append(graph.qualifiedIndex[qn], node)
 		graph.plainNameIndex[f.Name] = append(graph.plainNameIndex[f.Name], node)
 		// 同包索引：只有有包名的函数才加入
 		if f.PackageName != "" {
@@ -98,17 +103,29 @@ func (a *Analyzer) BuildCallGraph(sessionID int64) (*CallGraph, error) {
 	}
 
 	// 填充调用/被调用关系
-	for _, node := range graph.Nodes {
+	for _, node := range graph.IDIndex {
 		deps := allDeps[node.Function.ID]
 		for _, dep := range deps {
 			node.Callees = append(node.Callees, dep)
 
-			// 策略 1：精确匹配限定名 pkg.dep
+			// 策略 0：直接匹配完整限定名（如 "fscanner.New" 来自 AST 的 @qualified 捕获）
 			matched := false
-			if node.Function.PackageName != "" {
+			if strings.Contains(dep, ".") {
+				if calleeNodes, ok := graph.qualifiedIndex[dep]; ok {
+					for _, calleeNode := range calleeNodes {
+						calleeNode.Callers = append(calleeNode.Callers, node.Qualified)
+					}
+					matched = true
+				}
+			}
+
+			// 策略 1：精确匹配限定名 pkg.dep
+			if !matched && node.Function.PackageName != "" {
 				qd := fmt.Sprintf("%s.%s", node.Function.PackageName, dep)
-				if calleeNode, ok := graph.Nodes[qd]; ok {
-					calleeNode.Callers = append(calleeNode.Callers, node.Qualified)
+				if calleeNodes, ok := graph.qualifiedIndex[qd]; ok {
+					for _, calleeNode := range calleeNodes {
+						calleeNode.Callers = append(calleeNode.Callers, node.Qualified)
+					}
 					matched = true
 				}
 			}
@@ -140,7 +157,7 @@ func (a *Analyzer) BuildCallGraph(sessionID int64) (*CallGraph, error) {
 // FindOrphanFunctions 查找未被任何函数调用的函数（可能的死代码）
 func (g *CallGraph) FindOrphanFunctions() []*FuncNode {
 	var orphans []*FuncNode
-	for _, node := range g.Nodes {
+	for _, node := range g.IDIndex {
 		if len(node.Callers) == 0 {
 			orphans = append(orphans, node)
 		}
@@ -155,7 +172,7 @@ func (g *CallGraph) FindHotFunctions(limit int) []*FuncNode {
 		cnt  int
 	}
 	var sorted []kv
-	for _, node := range g.Nodes {
+	for _, node := range g.IDIndex {
 		sorted = append(sorted, kv{node: node, cnt: len(node.Callers)})
 	}
 	// 标准库排序 O(n log n)

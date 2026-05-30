@@ -156,7 +156,7 @@ func (s *Store) QueryDead() ([]*FuncBrief, error) {
 		        f.parameters, f.return_types, f.receiver, f.is_method, f.visibility,
 		        f.cyclomatic, f.parameter_count, f.return_count, f.statement_count, f.anonymous_funcs
 		 FROM functions f
-		 WHERE f.call_count = 0 AND f.id NOT IN (SELECT caller_id FROM function_deps)
+		 WHERE f.name NOT IN (SELECT DISTINCT callee_name FROM function_deps)
 		 ORDER BY (f.line_end - f.line_start + 1) DESC`,
 	)
 	if err != nil {

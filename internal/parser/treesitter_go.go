@@ -84,7 +84,7 @@ const (
 	qFuncDecl   = `(function_declaration name: (identifier) @name body: (block) @body) @func`
 	qMethodDecl = `(method_declaration name: (field_identifier) @name body: (block) @body) @func`
 	qCall       = `(call_expression function: (identifier) @callee) @call`
-	qSelCall    = `(call_expression function: (selector_expression (field_identifier) @callee)) @call`
+	qSelCall    = `(call_expression function: (selector_expression (field_identifier) @callee) @qualified) @call`
 	qPkg        = `(source_file (package_clause (package_identifier) @pkg))`
 	qVar        = `(var_declaration (var_spec name: (identifier) @name type: (_)? @type) @spec) @decl`
 	qConst      = `(const_declaration (const_spec name: (identifier) @name type: (_)? @type) @spec) @decl`
@@ -555,16 +555,40 @@ func tsAnalyzeCalls(bodyNode *sitter.Node, content []byte, lang *sitter.Language
 				if !ok {
 					break
 				}
+				calleeName := ""
+				qualifiedName := ""
 				for _, c := range m.Captures {
-					if q2.CaptureNameForId(c.Index) == "callee" && c.Node != nil {
-						callee := strings.TrimSpace(c.Node.Content(content))
-						if callee != "" && !goKeywords[callee] {
-							if !seen[callee] {
-								stats.Callees = append(stats.Callees, callee)
-								seen[callee] = true
-							}
-							stats.CallCount++
+					switch q2.CaptureNameForId(c.Index) {
+					case "callee":
+						if c.Node != nil {
+							calleeName = strings.TrimSpace(c.Node.Content(content))
 						}
+					case "qualified":
+						if c.Node != nil {
+							qualifiedName = strings.TrimSpace(c.Node.Content(content))
+						}
+					}
+				}
+				// 添加简单名（如 "New"）
+				if calleeName != "" && !goKeywords[calleeName] {
+					if !seen[calleeName] {
+						stats.Callees = append(stats.Callees, calleeName)
+						seen[calleeName] = true
+					}
+					stats.CallCount++
+				}
+				// 额外添加完整限定名（如 "fscanner.New"），让 BuildCallGraph 能直配
+				// 同时过滤掉限定名中的部分（如 "fmt.Sprintf" 中 Sprintf 是关键字）
+				lastDot := strings.LastIndex(qualifiedName, ".")
+				qualFunc := qualifiedName
+				if lastDot >= 0 {
+					qualFunc = qualifiedName[lastDot+1:]
+				}
+				if qualifiedName != "" && qualifiedName != calleeName &&
+					!goKeywords[qualifiedName] && !goKeywords[qualFunc] {
+					if !seen[qualifiedName] {
+						stats.Callees = append(stats.Callees, qualifiedName)
+						seen[qualifiedName] = true
 					}
 				}
 			}

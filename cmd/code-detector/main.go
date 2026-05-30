@@ -928,23 +928,127 @@ func printQueryCallers(store *db.Store, funcName string) {
 	}
 }
 
-// printQueryDead 列出未被调用的函数
+// printQueryDead 列出未被调用的函数（通过调用图分析）
 func printQueryDead(store *db.Store) {
-	funcs, err := store.QueryDead()
+	// 获取最新扫描会话 ID
+	var sessionID int64
+	err := store.DB.QueryRow(`SELECT id FROM scan_sessions ORDER BY id DESC LIMIT 1`).Scan(&sessionID)
 	if err != nil {
-		fatal("查询死代码失败: %v", err)
+		fatal("没有扫描数据，请先运行扫描: %v", err)
 	}
+
+	an := analyzer.New(store)
+	graph, err := an.BuildCallGraph(sessionID)
+	if err != nil {
+		fatal("构建调用图失败: %v", err)
+	}
+
+	orphans := graph.FindOrphanFunctions()
 	if outputFormat == "json" {
-		jsonOut(funcs)
+		type orphanBrief struct {
+			Name      string `json:"name"`
+			Language  string `json:"language"`
+			FilePath  string `json:"file_path"`
+			LineStart int    `json:"line_start"`
+			LineEnd   int    `json:"line_end"`
+			LineCount int    `json:"line_count"`
+		}
+		items := make([]orphanBrief, 0, len(orphans))
+		for _, node := range orphans {
+			items = append(items, orphanBrief{
+				Name:      node.Function.Name,
+				Language:  node.Function.Language,
+				FilePath:  node.Function.FilePath,
+				LineStart: node.Function.LineStart,
+				LineEnd:   node.Function.LineEnd,
+				LineCount: node.Function.LineEnd - node.Function.LineStart + 1,
+			})
+		}
+		jsonOut(items)
 		return
 	}
 
-	fmt.Printf("未被调用的函数 (共 %d 个):\n\n", len(funcs))
-	for _, f := range funcs {
-		fmt.Printf("  %-30s [%s] %s L%d-L%d (%d 行)\n",
-			f.Name, f.Language, f.FilePath, f.LineStart, f.LineEnd, f.LineCount)
+	// 分类统计
+	type tagCount struct {
+		tag   string
+		count int
 	}
-	if len(funcs) == 0 {
+	tagTotal := make(map[string]int)
+	classify := func(f *model.Function) string {
+		// 测试函数
+		if strings.HasSuffix(f.FilePath, "_test.go") {
+			return "[test]"
+		}
+		// testdata 夹具
+		if strings.Contains(f.FilePath, "\\testdata") {
+			return "[fixture]"
+		}
+		// init — Go 运行时自动调用
+		if f.Name == "init" {
+			return "[runtime]"
+		}
+		// main — Go 程序入口
+		if f.Name == "main" && f.PackageName == "main" {
+			return "[entry]"
+		}
+		// MCP handler — 通过 handler 表注册调用
+		if strings.Contains(f.FilePath, "internal\\mcp\\") && (strings.HasPrefix(f.Name, "handle") || strings.HasPrefix(f.Name, "resource")) {
+			return "[mcp]"
+		}
+		// GetLang 访问器 — 通过 map/lang 表调度
+		if strings.HasSuffix(f.Name, "GetLang") {
+			return "[lang]"
+		}
+		// Parser 接口实现（Globals/Language）
+		if f.Name == "Globals" || f.Name == "Language" {
+			return "[iface]"
+		}
+		// 函数引用作为参数传递
+		if f.Name == "isKeyword" || f.Name == "isAllUpper" || f.Name == "inStringLike" {
+			return "[func-ref]"
+		}
+		// 闭包内的调用（AST 不穿透）
+		if f.Name == "Close" && f.PackageName == "db" {
+			return "[closure]"
+		}
+		// 默认：进一步通过 SQL 交叉验证
+		callers, err := store.QueryCallers(f.Name)
+		if err == nil && len(callers) > 0 {
+			return "[cgap]" // 调用图遗漏（SQL 能找到调用者但图匹配没连上）
+		}
+		return "[dead]"
+	}
+
+	fmt.Printf("未被调用的函数 (共 %d 个):\n\n", len(orphans))
+	for _, node := range orphans {
+		tag := classify(node.Function)
+		tagTotal[tag]++
+		fmt.Printf("  %-9s %-30s [%s] %s L%d-L%d (%d 行)\n",
+			tag, node.Function.Name, node.Function.Language, node.Function.FilePath,
+			node.Function.LineStart, node.Function.LineEnd,
+			node.Function.LineEnd-node.Function.LineStart+1)
+	}
+	if len(orphans) > 0 {
+		fmt.Println()
+		fmt.Println("  ── 分类统计 ──")
+		for _, tc := range []struct{ tag, desc string }{
+			{"[test]",     "测试函数 (go test 调用)"},
+			{"[fixture]",  "测试数据文件中的函数"},
+			{"[runtime]",  "Go 运行时入口 (init/main)"},
+			{"[mcp]",      "MCP 服务注册处理函数"},
+			{"[lang]",     "语言访问器 (通过 map 调度)"},
+			{"[iface]",    "Parser 接口实现"},
+			{"[func-ref]","作为函数参数传递"},
+			{"[closure]",  "闭包体内调用 (AST 不穿透)"},
+			{"[cgap]",     "调用图遗漏（SQL 查到调用者但图没连上）"},
+			{"[dead]",     "⚠️ 真死代码，建议检查"},
+		} {
+			if cnt := tagTotal[tc.tag]; cnt > 0 {
+				fmt.Printf("    %-9s %3d 个 — %s\n", tc.tag, cnt, tc.desc)
+			}
+		}
+	}
+	if len(orphans) == 0 {
 		fmt.Println("  (无)")
 	}
 }

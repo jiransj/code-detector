@@ -184,21 +184,6 @@ func countIndent(line string) int {
 	return count
 }
 
-func findBraceInLine(line string) int {
-	inSingle, inDouble, inBacktick := false, false, false
-	for i, ch := range line {
-		if ch == '\'' && !inDouble && !inBacktick {
-			inSingle = !inSingle
-		} else if ch == '"' && !inSingle && !inBacktick {
-			inDouble = !inDouble
-		} else if ch == '`' && !inSingle && !inDouble {
-			inBacktick = !inBacktick
-		} else if ch == '{' && !inSingle && !inDouble && !inBacktick {
-			return i
-		}
-	}
-	return -1
-}
 
 // goKeywords Go 关键字和常用内置函数（用于调用分析过滤）
 var goKeywords = map[string]bool{
