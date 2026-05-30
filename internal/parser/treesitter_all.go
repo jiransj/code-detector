@@ -235,6 +235,36 @@ func (p *TreeSitterParser) Globals(filePath string, content []byte) ([]*model.Gl
 	return nil, nil
 }
 
+// tsAllQueryCache 缓存 tree-sitter Query 对象，避免每次解析重复编译
+// key = fmt.Sprintf("%p|%s", lang, queryStr)
+// lang 是包级单例，跨 goroutine 指针稳定
+type tsAllQueryCache struct {
+	mu   sync.Mutex
+	m    map[string]*sitter.Query
+}
+
+func (c *tsAllQueryCache) get(lang *sitter.Language, queryStr string) *sitter.Query {
+	key := fmt.Sprintf("%p|%s", lang, queryStr)
+	c.mu.Lock()
+	if q, ok := c.m[key]; ok {
+		c.mu.Unlock()
+		return q
+	}
+	c.mu.Unlock()
+
+	q, err := sitter.NewQuery([]byte(queryStr), lang)
+	if err != nil || q == nil {
+		return nil
+	}
+
+	c.mu.Lock()
+	c.m[key] = q
+	c.mu.Unlock()
+	return q
+}
+
+var tsAllQueries = &tsAllQueryCache{m: make(map[string]*sitter.Query)}
+
 // allParserPool 复用多语言 tree-sitter Parser 对象
 // 注意：每个 Parser 取出后需调用 SetLanguage 设置当前语言
 var allParserPool = sync.Pool{
@@ -272,11 +302,10 @@ func tsEachFor(root *sitter.Node, queryStr string, content []byte, lang *sitter.
 	if queryStr == "" {
 		return
 	}
-	q, err := sitter.NewQuery([]byte(queryStr), lang)
-	if err != nil || q == nil {
+	q := tsAllQueries.get(lang, queryStr)
+	if q == nil {
 		return
 	}
-	defer q.Close()
 	cursor := sitter.NewQueryCursor()
 	if cursor == nil {
 		return
@@ -312,11 +341,10 @@ func tsFirstFor(root *sitter.Node, queryStr, capName string, content []byte, lan
 	if queryStr == "" {
 		return ""
 	}
-	q, err := sitter.NewQuery([]byte(queryStr), lang)
-	if err != nil || q == nil {
+	q := tsAllQueries.get(lang, queryStr)
+	if q == nil {
 		return ""
 	}
-	defer q.Close()
 	cursor := sitter.NewQueryCursor()
 	if cursor == nil {
 		return ""
@@ -339,11 +367,10 @@ func tsFindLineFor(name string, root *sitter.Node, queryStr string, content []by
 	if queryStr == "" {
 		return 0, 0
 	}
-	q, err := sitter.NewQuery([]byte(queryStr), lang)
-	if err != nil || q == nil {
+	q := tsAllQueries.get(lang, queryStr)
+	if q == nil {
 		return 0, 0
 	}
-	defer q.Close()
 	cursor := sitter.NewQueryCursor()
 	if cursor == nil {
 		return 0, 0
@@ -378,11 +405,10 @@ func tsFindBodyFor(name string, root *sitter.Node, queryStr string, content []by
 	if queryStr == "" {
 		return nil
 	}
-	q, err := sitter.NewQuery([]byte(queryStr), lang)
-	if err != nil || q == nil {
+	q := tsAllQueries.get(lang, queryStr)
+	if q == nil {
 		return nil
 	}
-	defer q.Close()
 	cursor := sitter.NewQueryCursor()
 	if cursor == nil {
 		return nil
@@ -435,9 +461,8 @@ func tsAnalyzeCallsFor(bodyNode *sitter.Node, content []byte, lang *sitter.Langu
 	}
 
 	// 普通调用
-	q, _ := sitter.NewQuery([]byte(callQuery), lang)
+	q := tsAllQueries.get(lang, callQuery)
 	if q != nil {
-		defer q.Close()
 		cursor := sitter.NewQueryCursor()
 		if cursor != nil {
 			defer cursor.Close()
@@ -458,9 +483,8 @@ func tsAnalyzeCallsFor(bodyNode *sitter.Node, content []byte, lang *sitter.Langu
 
 	// selector 调用
 	if selCallQuery != "" {
-		q2, _ := sitter.NewQuery([]byte(selCallQuery), lang)
+		q2 := tsAllQueries.get(lang, selCallQuery)
 		if q2 != nil {
-			defer q2.Close()
 			cursor2 := sitter.NewQueryCursor()
 			if cursor2 != nil {
 				defer cursor2.Close()
