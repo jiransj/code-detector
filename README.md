@@ -8,7 +8,7 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
-  <img src="https://img.shields.io/badge/version-v1.1-brightgreen.svg" alt="Version v1.1">
+  <img src="https://img.shields.io/badge/version-v1.2-brightgreen.svg" alt="Version v1.2">
   <img src="https://img.shields.io/badge/go-1.26-blue.svg" alt="Go 1.26">
   <img src="https://img.shields.io/badge/platform-windows%20%7C%20linux-lightgrey.svg" alt="Platform">
 </p>
@@ -24,7 +24,7 @@
 从函数角度审查项目的健壮性，函数的合理程度，是否重复造轮子
 排除无关上下文干扰，对code agent具有良好支持辅助作用
 
-当前版本：**v1.1**
+当前版本：**v1.2**
 
 ---
 
