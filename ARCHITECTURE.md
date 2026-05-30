@@ -81,7 +81,7 @@
    │
    ├─ initProjectRoot()      ← 路径安全检查（拒绝扫描系统关键目录）
    │
-   ├─ initConfig()           ← 加载 config.yaml（或内置默认10种语言配置）
+   ├─ initConfig()           ← 加载 config.yaml（或内置默认14种语言配置）
    │   └─ config.LoadConfig() / DefaultConfig()
    │
    ├─ initDB()               ← 初始化 SQLite 数据库
@@ -239,7 +239,7 @@ code-detector/
 │   ├── config/
 │   │   └── config.go         ← 语言配置加载（YAML / 内置默认）
 │   │       ├── LoadConfig()              ← 加载YAML，不存在则用默认
-│   │       ├── DefaultConfig()           ← 内置10种语言配置
+│   │       ├── DefaultConfig()           ← 内置14种语言配置
 │   │       ├── GetLanguageConfigsMap()   ← 扩展名→配置索引
 │   │       └── GetLanguageByName()       ← 语言名→配置查找
 │   │
@@ -715,14 +715,13 @@ Analyzer.BuildCallGraph(sessionID)
 
 ## 八、关键设计决策
 
-1. **解析器体系：Tree-sitter 为主，正则回退为辅** — 全部 14 种语言优先使用 Tree-sitter C API 进行 AST 解析，Go 拥有专用 `TreeSitterGoParser` 增强圈复杂度/嵌套深度等精确度量；旧的正则解析器保留作为回退方案
-2. **数据驱动后备** — 对于没有专用解析器的语言，可用 `config.yaml` 配置正则表达式，`GenericParser` 兜底
+1. **解析器体系：Tree-sitter 为主，正则回退为辅** — 全部 14 种语言均通过 Tree-sitter C API 进行 AST 解析，Go 拥有专用 `TreeSitterGoParser` 增强圈复杂度/嵌套深度/语句数/参数数等精确度量；旧的正则解析器（`go_parser.go` 等）保留作为回退方案
+2. **数据驱动后备** — 对于 `config.yaml` 中配置的自定义语言扩展名，如果 `DefaultParsers()` 中没有对应的 Tree-sitter 解析器，则 `GenericParser` 使用正则表达式兜底
 3. **编码自适应** — 自动检测 UTF-8/UTF-16 BOM、无 BOM UTF-16 启发式检测、GBK 等非 UTF-8 回退
 4. **并发模型** — 生产者-消费者模式：主 goroutine 收集文件后通过 channel 分发，N 个 worker 并发解析
 5. **增量扫描** — 通过文件 mtime 缓存跳过未变更文件，适合大型项目的重复扫描
 6. **去重机制** — 函数内容 SHA256 哈希去重 + 硬链接 `os.SameFile()` 去重
 7. **会话管理** — 自动清理旧会话（保留最近3个），防止数据库无限膨胀
 8. **WAL 模式** — SQLite WAL 模式提升并发写入性能，扫描完成时主动 checkpoint
-9. **Tree-sitter 加速** — 对 Go 语言提供基于 tree-sitter C API 的 AST 解析路径，支持圈复杂度、语句数、参数数等精确度量和嵌套深度检测
-10. **查询模式 (-query)** — 复用已有的分析器 (`internal/analyzer`) 和数据库查询层 (`internal/db/querier.go`)，无需重新扫描即可获取死代码、热点函数、调用链等分析结果
-11. **MCP 协议集成** — 通过 `-mcp` 标志启动 JSON-RPC over stdio 服务器，使 AI 工具（如 Claude/Cline）能直接查询函数库，无需 CLI 交互
+9. **查询模式 (-query)** — 复用已有的分析器 (`internal/analyzer`) 和数据库查询层 (`internal/db/querier.go`)，无需重新扫描即可获取死代码、热点函数、调用链等分析结果
+10. **MCP 协议集成** — 通过 `-mcp` 标志启动 JSON-RPC over stdio 服务器，使 AI 工具（如 Claude/Cline）能直接查询函数库，无需 CLI 交互
