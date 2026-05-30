@@ -1,15 +1,92 @@
 # code-detector 默认配置文件
-# 可以在此文件中覆盖或扩展语言定义
-# 如果文件不存在或读取失败，会使用内置默认配置
-languages:
-  # - name: "go"
-  #   extensions: [".go"]
-  #   function_regex: "func\\s+(?P<name>\\w+)\\s*\\("
-  #   single_comment: ["//"]
-  #   block_comment: [["/*", "*/"]]
-
-  # - name: "python"
-  #   extensions: [".py"]
-  #   function_regex: "^\\s*def\\s+(?P<name>\\w+)\\s*\\("
-  #   single_comment: ["#"]
-  #   block_comment: [['"""', '"""'], ["'''", "'''"]]
+# 内置内置 tree-sitter AST 解析器支持以下14种语言，
+# 此处列出的正则规则作为回退/备用解析方案。
+# 如需添加自定义语言，取消注释并按模板填写。
+#
+# 注意: 如果此处 languages 列表非空，将完全替换内置正则规则，
+# 但不会覆盖 tree-sitter AST 解析器。
+#
+# languages:
+#   - name: "go"
+#     extensions: [".go"]
+#     function_regex: "func\\s+(?P<name>\\w+)\\s*\\("
+#     single_comment: ["//"]
+#     block_comment: [["/*", "*/"]]
+#
+#   - name: "python"
+#     extensions: [".py"]
+#     function_regex: "^\\s*def\\s+(?P<name>\\w+)\\s*\\("
+#     single_comment: ["#"]
+#     block_comment: [['"""', '"""'], ["'''", "'''"]]
+#
+#   - name: "java"
+#     extensions: [".java"]
+#     function_regex: "(?:(?:public|private|protected|static|final|abstract|synchronized)\\s+)*(?:\\w+(?:\\[\\])*)\\s+(?P<name>\\w+)\\s*\\("
+#     single_comment: ["//"]
+#     block_comment: [["/*", "*/"]]
+#
+#   - name: "kotlin"
+#     extensions: [".kt", ".kts"]
+#     function_regex: "(?:fun\\s+)(?P<name>\\w+)\\s*\\("
+#     single_comment: ["//"]
+#     block_comment: [["/*", "*/"]]
+#
+#   - name: "javascript"
+#     extensions: [".js", ".jsx", ".mjs"]
+#     function_regex: "(?:(?:async\\s+)?function\\s+(?P<name>\\w+)\\s*\\(|(?:\\w+)\\s*[:=]\\s*(?:async\\s+)?function\\s*\\(|(?:\\w+)\\s*[:=]\\s*\\([^)]*\\)\\s*=>)"
+#     single_comment: ["//"]
+#     block_comment: [["/*", "*/"]]
+#
+#   - name: "typescript"
+#     extensions: [".ts", ".tsx"]
+#     function_regex: "(?:(?:async\\s+)?function\\s+(?P<name>\\w+)\\s*\\(|(?:\\w+)\\s*[:=]\\s*(?:async\\s+)?function\\s*\\(|(?:\\w+)\\s*[:=]\\s*\\([^)]*\\)\\s*=>)"
+#     single_comment: ["//"]
+#     block_comment: [["/*", "*/"]]
+#
+#   - name: "csharp"
+#     extensions: [".cs"]
+#     function_regex: "(?:(?:public|private|protected|internal|static|virtual|override|abstract|async|unsafe)\\s+)*(?:\\w+(?:\\[\\])*(?:<[^>]+>)?)\\s+(?P<name>\\w+)\\s*\\("
+#     single_comment: ["//"]
+#     block_comment: [["/*", "*/"]]
+#
+#   - name: "cpp"
+#     extensions: [".cpp", ".cxx", ".cc", ".c", ".h", ".hpp"]
+#     function_regex: "(?:(?:\\w+(?:\\[\\])*(?:\\s*<[^>]+>)?\\s+)+)(?P<name>\\w+)\\s*\\("
+#     single_comment: ["//"]
+#     block_comment: [["/*", "*/"]]
+#
+#   - name: "rust"
+#     extensions: [".rs"]
+#     function_regex: "(?:pub\\s+(?:unsafe\\s+)?)?fn\\s+(?P<name>\\w+)\\s*\\("
+#     single_comment: ["//"]
+#     block_comment: [["/*", "*/"]]
+#
+#   - name: "ruby"
+#     extensions: [".rb"]
+#     function_regex: "^\\s*(?:def\\s+)(?P<name>\\w+(?:[?!])?)\\s*[\\(;]"
+#     single_comment: ["#"]
+#     block_comment: [["=begin", "=end"]]
+#
+#   - name: "swift"
+#     extensions: [".swift"]
+#     function_regex: "(?:func\\s+)(?P<name>\\w+)\\s*\\("
+#     single_comment: ["//"]
+#     block_comment: [["/*", "*/"]]
+#
+#   - name: "php"
+#     extensions: [".php"]
+#     function_regex: "(?:function\\s+)(?P<name>\\w+)\\s*\\("
+#     single_comment: ["//", "#"]
+#     block_comment: [["/*", "*/"]]
+#
+#   - name: "lua"
+#     extensions: [".lua"]
+#     function_regex: "(?:function\\s+)(?P<name>\\w+(?:[.:]\\w+)*)\\s*\\("
+#     single_comment: ["--"]
+#     block_comment: [["--[[", "]]"]]
+#
+#   - name: "scala"
+#     extensions: [".scala"]
+#     function_regex: "(?:def\\s+)(?P<name>\\w+)\\s*\\("
+#     single_comment: ["//"]
+#     block_comment: [["/*", "*/"]]

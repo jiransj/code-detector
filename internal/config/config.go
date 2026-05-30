@@ -32,6 +32,10 @@ func defaultLanguages() []model.LanguageConfig {
 		{Name: "cpp", Extensions: []string{".cpp", ".cxx", ".cc", ".c", ".h", ".hpp"}, FunctionRegex: `(?:(?:\w+(?:\[\])*(?:\s*<[^>]+>)?\s+)+)(?P<name>\w+)\s*\(`, BodyStrategy: "brace", SingleComment: []string{"//"}, BlockComment: [][2]string{{"/*", "*/"}}},
 		{Name: "rust", Extensions: []string{".rs"}, FunctionRegex: `(?:pub\s+(?:unsafe\s+)?)?fn\s+(?P<name>\w+)\s*\(`, BodyStrategy: "brace", SingleComment: []string{"//"}, BlockComment: [][2]string{{"/*", "*/"}}},
 		{Name: "ruby", Extensions: []string{".rb"}, FunctionRegex: `^\s*(?:def\s+)(?P<name>\w+(?:[?!])?)\s*[\(;]`, BodyStrategy: "end", SingleComment: []string{"#"}, BlockComment: [][2]string{{"=begin", "=end"}}},
+		{Name: "swift", Extensions: []string{".swift"}, FunctionRegex: `(?:func\s+)(?P<name>\w+)\s*\(`, BodyStrategy: "brace", SingleComment: []string{"//"}, BlockComment: [][2]string{{"/*", "*/"}}},
+		{Name: "php", Extensions: []string{".php"}, FunctionRegex: `(?:function\s+)(?P<name>\w+)\s*\(`, BodyStrategy: "brace", SingleComment: []string{"//", "#"}, BlockComment: [][2]string{{"/*", "*/"}}},
+		{Name: "lua", Extensions: []string{".lua"}, FunctionRegex: `(?:function\s+)(?P<name>\w+(?:[.:]\w+)*)\s*\(`, BodyStrategy: "brace", SingleComment: []string{"--"}, BlockComment: [][2]string{{"--[[", "]]"}}},
+		{Name: "scala", Extensions: []string{".scala"}, FunctionRegex: `(?:def\s+)(?P<name>\w+)\s*\(`, BodyStrategy: "brace", SingleComment: []string{"//"}, BlockComment: [][2]string{{"/*", "*/"}}},
 	}
 }
 

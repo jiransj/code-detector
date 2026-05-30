@@ -35,13 +35,13 @@
 | **Go** | `go` | `.go` | tree-sitter AST |
 | **Python** | `python` | `.py` | tree-sitter AST |
 | **Java** | `java` | `.java` | tree-sitter AST |
-| **Kotlin** | `kotlin` | `.kt`, `.kts` | tree-sitter AST 🆕 |
-| **Swift** | `swift` | `.swift` | tree-sitter AST 🆕 |
+| **Kotlin** | `kotlin` | `.kt`, `.kts` | tree-sitter AST |
+| **Swift** | `swift` | `.swift` | tree-sitter AST |
 | **JavaScript** | `javascript` | `.js`, `.jsx`, `.mjs` | tree-sitter AST |
 | **TypeScript** | `typescript` | `.ts`, `.tsx` | tree-sitter AST |
-| **PHP** | `php` | `.php` | tree-sitter AST 🆕 |
-| **Lua** | `lua` | `.lua` | tree-sitter AST 🆕 |
-| **Scala** | `scala` | `.scala` | tree-sitter AST 🆕 |
+| **PHP** | `php` | `.php` | tree-sitter AST |
+| **Lua** | `lua` | `.lua` | tree-sitter AST |
+| **Scala** | `scala` | `.scala` | tree-sitter AST |
 | **C#** | `csharp` | `.cs` | tree-sitter AST |
 | **C/C++** | `cpp` | `.cpp`, `.cxx`, `.cc`, `.c`, `.h`, `.hpp` | tree-sitter AST |
 | **Rust** | `rust` | `.rs` | tree-sitter AST |
@@ -82,7 +82,7 @@ code-detector -lang go,java,python ./myproject
 code-detector -lang go,py,js,ts,rs -verbose ./src
 ```
 
-`-lang` 参数接受语言内部名称或文件扩展名，例如：`go` / `py` / `java` / `js` / `ts` / `cs` / `cpp` / `rs` / `rb` / `kt`。
+`-lang` 参数接受语言内部名称或文件扩展名，例如：`go` / `py` / `java` / `js` / `ts` / `cs` / `cpp` / `rs` / `rb` / `kt` / `swift` / `php` / `lua` / `scala`。
 
 **排除目录并指定并发数：**
 

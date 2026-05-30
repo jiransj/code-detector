@@ -4,8 +4,8 @@
 # ============================================================================
 
 # ── 基本配置 ──────────────────────────────────────────────────────────────
-# 注意: 务必用 `go build -o code-detector.exe ./cmd/scanner/` 或 `make`
-#       不要直接 `go build ./cmd/scanner/`，它会输出 scanner.exe
+# 注意: 务必用 `go build -o code-detector.exe ./cmd/code-detector/` 或 `make`
+#       不要直接 `go build ./cmd/code-detector/`，它会输出 code-detector.exe
 BINARY    := code-detector
 OUTPUT_DIR := build
 GO        := go
@@ -37,7 +37,7 @@ build:
 	@printf "$(BLUE)━━━ 构建 $(BINARY) v$(VERSION) ━━━$(RESET)\n"
 	@printf "  编译时间: $(BUILD_TIME)\n"
 	@mkdir -p $(OUTPUT_DIR)
-	$(GO) build -ldflags="$(LDFLAGS)" -o $(OUTPUT_DIR)/$(BINARY) ./cmd/scanner
+	$(GO) build -ldflags="$(LDFLAGS)" -o $(OUTPUT_DIR)/$(BINARY) ./cmd/code-detector
 	@printf "$(GREEN)✓ 构建成功: $(OUTPUT_DIR)/$(BINARY)$(RESET)\n"
 	@printf "  文件大小: "
 	@ls -lh $(OUTPUT_DIR)/$(BINARY) 2>/dev/null | awk '{print $$5}'
@@ -45,7 +45,7 @@ build:
 # ── 直接构建到当前目录（开发用）─────────────────────────────────────────────
 dev:
 	@printf "$(YELLOW)▶ 开发构建...$(RESET)\n"
-	$(GO) build -ldflags="$(LDFLAGS)" -o $(BINARY) ./cmd/scanner
+	$(GO) build -ldflags="$(LDFLAGS)" -o $(BINARY) ./cmd/code-detector
 	@printf "$(GREEN)✓ $(BINARY) 已构建$(RESET)\n"
 
 # ── 测试 ──────────────────────────────────────────────────────────────────
@@ -57,7 +57,7 @@ test: vet
 # ── 代码检查 ──────────────────────────────────────────────────────────────
 vet:
 	@printf "$(CYAN)▶ go vet...$(RESET)\n"
-	$(GO) vet ./cmd/scanner ./internal/...
+	$(GO) vet ./cmd/code-detector ./internal/...
 	@printf "$(GREEN)✓ go vet 通过$(RESET)\n"
 
 lint: vet
@@ -79,7 +79,7 @@ clean:
 # ── 运行扫描 ──────────────────────────────────────────────────────────────
 run:
 	@printf "$(BLUE)━━━ 运行扫描 ━━━$(RESET)\n"
-	$(GO) run ./cmd/scanner $(ARGS)
+	$(GO) run ./cmd/code-detector $(ARGS)
 
 scan: dev
 	@printf "$(BLUE)━━━ 扫描 $(DIR) ━━━$(RESET)\n"
@@ -88,7 +88,7 @@ scan: dev
 # ── 安装 ──────────────────────────────────────────────────────────────────
 install:
 	@printf "$(BLUE)━━━ 安装到 GOPATH/bin ━━━$(RESET)\n"
-	$(GO) install -ldflags="$(LDFLAGS)" ./cmd/scanner
+	$(GO) install -ldflags="$(LDFLAGS)" ./cmd/code-detector
 	@printf "$(GREEN)✓ 安装完成: $(shell $(GO) env GOPATH)/bin/$(BINARY)$(RESET)\n"
 
 # ── 显示版本 ──────────────────────────────────────────────────────────────

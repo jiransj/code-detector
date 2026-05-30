@@ -42,7 +42,7 @@ call :vet
 echo.
 echo [BUILD] Compiling binary...
 if not exist %OUTPUT_DIR% mkdir %OUTPUT_DIR%
-go build -ldflags="-s -w" -o %OUTPUT_DIR%\%BINARY% ./cmd/scanner
+go build -ldflags="-s -w" -o %OUTPUT_DIR%\%BINARY% ./cmd/code-detector
 if errorlevel 1 (
     echo [ERROR] Build failed
     exit /b 1
@@ -54,7 +54,7 @@ goto :eof
 :: --- Dev Build ---
 :dev
 echo [DEV] Quick build...
-go build -ldflags="-s -w" -o %BINARY% ./cmd/scanner 2>&1
+go build -ldflags="-s -w" -o %BINARY% ./cmd/code-detector 2>&1
 if errorlevel 1 (
     echo [ERROR] Build failed
     exit /b 1
@@ -65,7 +65,7 @@ goto :eof
 :: --- Test ---
 :test
 echo [TEST] Running go vet...
-go vet ./cmd/scanner ./internal/...
+go vet ./cmd/code-detector ./internal/...
 echo [OK] go vet passed
 echo.
 echo [TEST] Running go test...
@@ -76,7 +76,7 @@ goto :eof
 :: --- Vet ---
 :vet
 echo [LINT] Running go vet...
-go vet ./cmd/scanner ./internal/...
+go vet ./cmd/code-detector ./internal/...
 echo [OK] go vet passed
 goto :eof
 
@@ -92,7 +92,7 @@ goto :eof
 :run
 echo [RUN] Building and scanning...
 if not exist %OUTPUT_DIR% mkdir %OUTPUT_DIR%
-go build -ldflags="-s -w" -o %OUTPUT_DIR%\%BINARY% ./cmd/scanner
+go build -ldflags="-s -w" -o %OUTPUT_DIR%\%BINARY% ./cmd/code-detector
 if errorlevel 1 (
     echo [ERROR] Build failed
     exit /b 1
