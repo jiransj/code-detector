@@ -59,12 +59,9 @@ jobs:
         id: changelog
         shell: bash
         run: |
-          VER="${{ steps.version.outputs.version }}"
-          CHANGELOG_FILE="CHANGELOG-${VER}.md"
+          CHANGELOG_FILE="CHANGELOG.md"
           if [ -f "$CHANGELOG_FILE" ]; then
             echo "found=true" >> "$GITHUB_OUTPUT"
-            echo "file=$CHANGELOG_FILE" >> "$GITHUB_OUTPUT"
-            # Generate release body: title + changelog content
             echo "body<<EOF" >> "$GITHUB_OUTPUT"
             cat "$CHANGELOG_FILE" >> "$GITHUB_OUTPUT"
             echo "EOF" >> "$GITHUB_OUTPUT"
@@ -79,5 +76,3 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: code-detector ${{ steps.version.outputs.version }}
           body: ${{ steps.changelog.outputs.body }}
-          files: ${{ steps.changelog.outputs.file }}
-          fail_on_unmatched_files: false

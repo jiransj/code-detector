@@ -22,3 +22,6 @@ code-detector-v*/
 
 # Go 缓存
 vendor/
+
+# CHANGELOG 本地维护，通过 workflow 自动读取作为 Release Notes，不提交仓库
+CHANGELOG.md
