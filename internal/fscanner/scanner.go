@@ -45,28 +45,50 @@ func New(cfg *config.Config, reg *parser.Registry, store *db.Store) *Scanner {
 
 func defaultSkipDirs() map[string]bool {
 	return map[string]bool{
+		// 版本控制
 		".git":            true,
-		"node_modules":    true,
-		"vendor":          true,
-		"__pycache__":     true,
 		".svn":            true,
 		".hg":             true,
-		".gradle":         true,
-		"target":          true, // Maven/Gradle output
-		"bin":             true,
-		"obj":             true,
-		"dist":            true,
-		"build":           true,
-		".idea":           true,
-		".vscode":         true,
-		"venv":            true,
-		".venv":           true,
-		"env":             true,
-		".env":            true,
-		"third_party":     true,
-		"third-party":     true,
-		"packages":        true,
+		// 依赖包管理
+		"node_modules":     true,
+		"vendor":           true,   // Go / PHP / JS
+		"third_party":      true,
+		"third-party":      true,
 		"bower_components": true,
+		"jspm_packages":    true,
+		"typings":          true,
+		// Python
+		"__pycache__":      true,
+		"venv":             true,
+		".venv":            true,
+		"env":              true,
+		".env":             true,
+		".tox":             true,
+		".pytest_cache":    true,
+		".eggs":            true,
+		// Java / JVM
+		".gradle":          true,
+		".mvn":             true,
+		"gradle":           true,
+		// .NET
+		"bin":              true,
+		"obj":              true,
+		// JavaScript / TypeScript / Rust / Java (共享名)
+		"target":           true,  // Maven + Cargo output
+		"dist":             true,
+		"build":            true,
+		".next":            true,
+		".nuxt":            true,
+		// IDE
+		".idea":            true,
+		".vscode":          true,
+		".vs":              true,
+		// C / C++
+		"cmake-build-debug":    true,
+		"cmake-build-release":  true,
+		// 通用缓存/输出
+		"out":              true,
+		"__sapper__":       true,
 	}
 }
 
@@ -388,6 +410,10 @@ func (s *Scanner) flushBatch(funcBatch []*model.Function, varBatch []*model.Glob
 func (s *Scanner) finalizeSession(sessionID int64, start time.Time, fileCount int, result *model.ScanResult) {
 	if err := s.Store.UpdateSession(sessionID, time.Since(start), fileCount, len(result.Functions), len(result.GlobalVars)); err != nil && s.Verbose {
 		fmt.Fprintf(os.Stderr, "warn: UpdateSession: %v\n", err)
+	}
+	// 计算文件级指标
+	if err := s.Store.ComputeFileMetrics(sessionID); err != nil && s.Verbose {
+		fmt.Fprintf(os.Stderr, "warn: ComputeFileMetrics: %v\n", err)
 	}
 
 	result.Duration = time.Since(start)

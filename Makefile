@@ -13,6 +13,11 @@ VERSION   := $(shell git describe --tags --always --dirty 2>/dev/null || echo "d
 LDFLAGS   := -s -w -X main.version=$(VERSION)
 BUILD_TIME := $(shell date "+%Y-%m-%d %H:%M:%S" 2>/dev/null || echo "unknown")
 
+# ── CGO 配置（tree-sitter AST 解析器需要） ──────────────────────────
+# Windows: 确保 MinGW-w64 在 PATH 中
+# Linux/macOS: GCC/Clang 通常预装，CGO_ENABLED=1 默认开启
+CGO_ENABLED := 1
+
 # ── 颜色输出 ──────────────────────────────────────────────────────────────
 BLUE   := \033[34;1m
 GREEN  := \033[32;1m

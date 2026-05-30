@@ -68,15 +68,16 @@ type ParserRegistration struct {
 // DefaultParsers 返回内置的解析器列表，用于自动注册
 func DefaultParsers() []ParserRegistration {
 	return []ParserRegistration{
-		{NewGoParser(), []string{".go"}},
-		{NewPythonParser(), []string{".py"}},
-		{NewJavaParser(), []string{".java"}},
+		{NewTreeSitterGoParser(), []string{".go"}},
+		{NewTreeSitterParser(".py"), []string{".py"}},
+		{NewTreeSitterParser(".java"), []string{".java"}},
+		{NewTreeSitterParser(".js"), []string{".js", ".jsx", ".mjs"}},
+		{NewTreeSitterParser(".cs"), []string{".cs"}},
+		{NewTreeSitterParser(".cpp"), []string{".cpp", ".cxx", ".cc", ".c", ".h", ".hpp"}},
+		{NewTreeSitterParser(".rs"), []string{".rs"}},
+		{NewTreeSitterParser(".rb"), []string{".rb"}},
+		// 以下语言暂时没有 tree-sitter grammar，保留旧解析器
 		{NewKotlinParser(), []string{".kt", ".kts"}},
-		{NewJavascriptParser(), []string{".js", ".jsx", ".mjs"}},
 		{NewTypescriptParser(), []string{".ts", ".tsx"}},
-		{NewCSharpParser(), []string{".cs"}},
-		{NewCPPParser(), []string{".cpp", ".cxx", ".cc", ".c", ".h", ".hpp"}},
-		{NewRustParser(), []string{".rs"}},
-		{NewRubyParser(), []string{".rb"}},
 	}
 }

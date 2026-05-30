@@ -19,7 +19,7 @@ import (
 	"code-detector/internal/parser"
 )
 
-const version = "0.7"
+const version = "0.8"
 
 // cleanup 退出前需执行的清理（关闭 DB 确保 WAL 回归），main 中初始化，fatal 中调用
 var cleanup func()
@@ -563,8 +563,31 @@ func runQueryMode(dbPath string, queryMode string) {
 			}
 		}
 		printQueryDeep(store, n)
+	// 🆕 AST 增强查询
+	case "complexity":
+		n := 10
+		if param != "" {
+			if v, err := strconv.Atoi(param); err == nil && v > 0 {
+				n = v
+			}
+		}
+		printQueryComplexity(store, n)
+	case "params":
+		n := 5
+		if param != "" {
+			if v, err := strconv.Atoi(param); err == nil && v > 0 {
+				n = v
+			}
+		}
+		printQueryByParams(store, n)
+	case "anon":
+		printQueryAnon(store)
+	case "files":
+		printQueryFiles(store)
+	case "types":
+		printQueryTypes(store)
 	default:
-		fmt.Fprintf(os.Stderr, "未知的查询模式: %s\n可用模式: summary, functions, func=NAME, vars, deps, calls=NAME, dead, missing, top=N, deep=N\n", queryMode)
+		fmt.Fprintf(os.Stderr, "未知的查询模式: %s\n可用模式: summary, functions, func=NAME, vars, deps, calls=NAME, dead, missing, top=N, deep=N, complexity=N, params=N, anon, files, types\n", queryMode)
 	}
 }
 
@@ -588,7 +611,7 @@ func printQuerySummary(store *db.Store) {
 	fmt.Printf("  函数总数:    %d\n", summary["func_count"])
 	fmt.Printf("  全局变量数:  %d\n", summary["var_count"])
 	fmt.Printf("  依赖关系数:  %d\n", summary["dep_count"])
-	fmt.Printf("  函数体总行数: %d\n", summary["total_lines"])
+	fmt.Printf("  函数体总行数: %d\n", summary["body_lines"])
 	fmt.Println()
 
 	if latest := summary["latest_session"]; latest != nil {
@@ -657,13 +680,13 @@ func printQueryFunctions(store *db.Store) {
 func printQueryFuncDetail(store *db.Store, param string) {
 	// 支持批量: 逗号分隔多个函数名
 	names := strings.Split(param, ",")
-	var allFuncs []*model.Function
+	var allFuncs []*db.FuncBrief
 	for _, n := range names {
 		n = strings.TrimSpace(n)
 		if n == "" {
 			continue
 		}
-		funcs, err := store.QueryFuncByName(n)
+		funcs, err := store.QueryFuncDetail(n)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "查询函数 '%s' 失败: %v\n", n, err)
 			continue
@@ -690,54 +713,62 @@ func printQueryFuncDetail(store *db.Store, param string) {
 			LineCount    int    `json:"line_count"`
 			CallCount    int    `json:"call_count"`
 			NestingDepth int   `json:"nesting_depth"`
-			BodyPreview  string `json:"body_preview,omitempty"`
-			Dependencies []string `json:"dependencies,omitempty"`
+			Parameters   string `json:"parameters,omitempty"`
+			ReturnTypes  string `json:"return_types,omitempty"`
+			Receiver     string `json:"receiver,omitempty"`
+			IsMethod     bool   `json:"is_method"`
+			Visibility   string `json:"visibility,omitempty"`
+			Cyclomatic   int    `json:"cyclomatic"`
+			ParamCount   int    `json:"param_count"`
+			ReturnCount  int    `json:"return_count"`
+			StmtCount    int    `json:"stmt_count"`
+			AnonFuncs    int    `json:"anon_funcs"`
 		}
 		var result []FuncJSON
 		for _, f := range allFuncs {
-			bodyPreview := ""
-			if f.Body != "" {
-				lines := strings.Split(f.Body, "\n")
-				const maxPreview = 10
-				show := len(lines)
-				if show > maxPreview {
-					show = maxPreview
-				}
-				bodyPreview = strings.Join(lines[:show], "\n")
-			}
-			r := FuncJSON{
-				ID:           f.ID,
-				Name:         f.Name,
-				PackageName:  f.PackageName,
-				Language:     f.Language,
-				FilePath:     f.FilePath,
-				LineStart:    f.LineStart,
-				LineEnd:      f.LineEnd,
-				LineCount:    f.LineEnd - f.LineStart + 1,
-				CallCount:    f.CallCount,
+			result = append(result, FuncJSON{
+				ID: f.ID, Name: f.Name, PackageName: f.PackageName,
+				Language: f.Language, FilePath: f.FilePath,
+				LineStart: f.LineStart, LineEnd: f.LineEnd,
+				LineCount: f.LineCount, CallCount: f.CallCount,
 				NestingDepth: f.NestingDepth,
-				BodyPreview:  bodyPreview,
-				Dependencies: f.Dependencies,
-			}
-			result = append(result, r)
+				Parameters: f.Parameters, ReturnTypes: f.ReturnTypes,
+				Receiver: f.Receiver, IsMethod: f.IsMethod,
+				Visibility: f.Visibility, Cyclomatic: f.Cyclomatic,
+				ParamCount: f.ParamCount, ReturnCount: f.ReturnCount,
+				StmtCount: f.StmtCount, AnonFuncs: f.AnonFuncs,
+			})
 		}
 		jsonOut(result)
 		return
 	}
 
 	for _, f := range allFuncs {
+		body, _ := store.QueryFuncBody(f.ID)
+		deps, _ := store.QueryDependencies(f.ID)
+
 		fmt.Println("═══════════════════════════════════════════")
 		fmt.Printf("  函数名:     %s\n", f.Name)
 		fmt.Printf("  包:         %s\n", f.PackageName)
 		fmt.Printf("  语言:       %s\n", f.Language)
 		fmt.Printf("  文件:       %s\n", f.FilePath)
-		fmt.Printf("  行号:       %d - %d (%d 行)\n", f.LineStart, f.LineEnd, f.LineEnd-f.LineStart+1)
+		fmt.Printf("  行号:       %d - %d (%d 行)\n", f.LineStart, f.LineEnd, f.LineCount)
 		fmt.Printf("  调用次数:   %d\n", f.CallCount)
 		fmt.Printf("  嵌套深度:   %d\n", f.NestingDepth)
+		fmt.Printf("  参数:       %s\n", f.Parameters)
+		fmt.Printf("  返回类型:   %s\n", f.ReturnTypes)
+		if f.IsMethod {
+			fmt.Printf("  接收器:     %s\n", f.Receiver)
+		}
+		fmt.Printf("  可见性:     %s\n", f.Visibility)
+		fmt.Printf("  圈复杂度:   %d\n", f.Cyclomatic)
+		fmt.Printf("  参数个数:   %d\n", f.ParamCount)
+		fmt.Printf("  return数:   %d\n", f.ReturnCount)
+		fmt.Printf("  语句数:     %d\n", f.StmtCount)
+		fmt.Printf("  匿名函数:   %d\n", f.AnonFuncs)
 		fmt.Println()
 
-		// 被调用的依赖
-		deps, _ := store.QueryDependencies(f.ID)
+		// 被调用的依赖 (already fetched above)
 		if len(deps) > 0 {
 			fmt.Printf("  调用了 (%d):\n", len(deps))
 			for _, d := range deps {
@@ -761,8 +792,8 @@ func printQueryFuncDetail(store *db.Store, param string) {
 		fmt.Println()
 
 		// 函数体（截取前 20 行）
-		if f.Body != "" {
-			lines := strings.Split(f.Body, "\n")
+		if body != "" {
+			lines := strings.Split(body, "\n")
 			showLines := len(lines)
 			if showLines > 20 {
 				showLines = 20
@@ -781,7 +812,7 @@ func printQueryFuncDetail(store *db.Store, param string) {
 
 // printQueryVars 列出所有全局变量
 func printQueryVars(store *db.Store) {
-	vars, err := store.QueryAllGlobalVars()
+	vars, err := store.QueryVars()
 	if err != nil {
 		fatal("查询全局变量失败: %v", err)
 	}
@@ -883,7 +914,7 @@ func printQueryCallers(store *db.Store, funcName string) {
 
 // printQueryDead 列出未被调用的函数
 func printQueryDead(store *db.Store) {
-	funcs, err := store.QueryDeadFunctions()
+	funcs, err := store.QueryDead()
 	if err != nil {
 		fatal("查询死代码失败: %v", err)
 	}
@@ -904,7 +935,7 @@ func printQueryDead(store *db.Store) {
 
 // printQueryMissing 列出被调用但未定义的函数
 func printQueryMissing(store *db.Store) {
-	missing, err := store.QueryMissingDeps()
+	missing, err := store.QueryMissing()
 	if err != nil {
 		fatal("查询缺失依赖失败: %v", err)
 	}
@@ -926,7 +957,7 @@ func printQueryMissing(store *db.Store) {
 
 // printQueryTop 列出最大的 N 个函数
 func printQueryTop(store *db.Store, n int) {
-	funcs, err := store.QueryTopFunctions(n)
+	funcs, err := store.QueryTop(n)
 	if err != nil {
 		fatal("查询最大函数失败: %v", err)
 	}
@@ -962,5 +993,111 @@ func printQueryDeep(store *db.Store, threshold int) {
 	for _, f := range funcs {
 		fmt.Printf("  %-30s depth=%d [%s] %s L%d-L%d (%d 行, calls=%d)\n",
 			f.Name, f.NestingDepth, f.Language, f.FilePath, f.LineStart, f.LineEnd, f.LineCount, f.CallCount)
+	}
+}
+
+// 🆕 printQueryComplexity 按圈复杂度列出
+func printQueryComplexity(store *db.Store, limit int) {
+	funcs, err := store.QueryByComplexity(limit)
+	if err != nil {
+		fatal("查询复杂度失败: %v", err)
+	}
+	if outputFormat == "json" {
+		jsonOut(funcs)
+		return
+	}
+	fmt.Printf("圈复杂度最高的 %d 个函数:\n\n", len(funcs))
+	for i, f := range funcs {
+		fmt.Printf("  #%-2d %-30s cyclomatic=%d [%s] %s L%d-L%d (%d 行, params=%d)\n",
+			i+1, f.Name, f.Cyclomatic, f.Language, f.FilePath, f.LineStart, f.LineEnd, f.LineCount, f.ParamCount)
+	}
+}
+
+// 🆕 printQueryByParams 按参数数量列出
+func printQueryByParams(store *db.Store, threshold int) {
+	funcs, err := store.QueryByParams(threshold)
+	if err != nil {
+		fatal("查询参数失败: %v", err)
+	}
+	if outputFormat == "json" {
+		jsonOut(funcs)
+		return
+	}
+	if len(funcs) == 0 {
+		fmt.Printf("没有参数数量 >= %d 的函数\n", threshold)
+		return
+	}
+	fmt.Printf("参数数量 >= %d 的函数 (共 %d 个):\n\n", threshold, len(funcs))
+	for _, f := range funcs {
+		fmt.Printf("  %-30s params=%d [%s] %s L%d-L%d (%s)\n",
+			f.Name, f.ParamCount, f.Language, f.FilePath, f.LineStart, f.LineEnd, f.Parameters)
+	}
+}
+
+// 🆕 printQueryAnon 列出含匿名函数的函数
+func printQueryAnon(store *db.Store) {
+	funcs, err := store.QueryAnonFuncs()
+	if err != nil {
+		fatal("查询匿名函数失败: %v", err)
+	}
+	if outputFormat == "json" {
+		jsonOut(funcs)
+		return
+	}
+	if len(funcs) == 0 {
+		fmt.Println("没有包含匿名函数的函数")
+		return
+	}
+	fmt.Printf("包含匿名函数的函数 (共 %d 个):\n\n", len(funcs))
+	for _, f := range funcs {
+		fmt.Printf("  %-30s anon=%d [%s] %s L%d-L%d (%d 行)\n",
+			f.Name, f.AnonFuncs, f.Language, f.FilePath, f.LineStart, f.LineEnd, f.LineCount)
+	}
+}
+
+// 🆕 printQueryFiles 文件级统计
+func printQueryFiles(store *db.Store) {
+	metrics, err := store.QueryFileMetrics()
+	if err != nil {
+		fatal("查询文件统计失败: %v", err)
+	}
+	if outputFormat == "json" {
+		jsonOut(metrics)
+		return
+	}
+	if len(metrics) == 0 {
+		fmt.Println("没有文件统计数据 (需要先扫描)")
+		return
+	}
+	fmt.Printf("文件统计 (共 %d 个文件):\n\n", len(metrics))
+	for _, m := range metrics {
+		fmt.Printf("  %s [%s]\n", m.FilePath, m.Language)
+		fmt.Printf("    行: %d (代码 %d / 注释 %d / 空白 %d)  函数: %d  类型: %d\n",
+			m.TotalLines, m.CodeLines, m.CommentLines, m.BlankLines, m.FuncCount, m.TypeCount)
+		fmt.Printf("    平均圈复杂度: %.1f  最高圈复杂度: %d   公开/私有: %d/%d  方法: %d\n",
+			m.AvgCyclomatic, m.MaxCyclomatic, m.PublicFuncs, m.PrivateFuncs, m.MethodsCount)
+		fmt.Printf("    总参数: %d  最大参数: %d  总return: %d  总匿名: %d\n\n",
+			m.TotalParameters, m.MaxParameters, m.TotalReturns, m.TotalAnonFuncs)
+	}
+}
+
+// 🆕 printQueryTypes 类型定义列表
+func printQueryTypes(store *db.Store) {
+	defs, err := store.QueryTypeDefs()
+	if err != nil {
+		fatal("查询类型定义失败: %v", err)
+	}
+	if outputFormat == "json" {
+		jsonOut(defs)
+		return
+	}
+	if len(defs) == 0 {
+		fmt.Println("没有类型定义数据 (需要先扫描)")
+		return
+	}
+	fmt.Printf("类型定义 (共 %d 个):\n\n", len(defs))
+	for _, d := range defs {
+		fmt.Printf("  %-25s kind=%s [%s] %s L%d-L%d\n",
+			d.Name, d.Kind, d.Language, d.FilePath, d.LineStart, d.LineEnd)
 	}
 }

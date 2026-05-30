@@ -8,7 +8,7 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
-  <img src="https://img.shields.io/badge/version-v0.7-brightgreen.svg" alt="Version v0.7">
+  <img src="https://img.shields.io/badge/version-v0.8-brightgreen.svg" alt="Version v0.8">
   <img src="https://img.shields.io/badge/go-1.26-blue.svg" alt="Go 1.26">
   <img src="https://img.shields.io/badge/platform-windows%20%7C%20linux-lightgrey.svg" alt="Platform">
 </p>
@@ -24,7 +24,7 @@
 从函数角度审查项目的健壮性，函数的合理程度，是否重复造轮子
 排除无关上下文干扰，对code agent具有良好支持辅助作用
 
-当前版本：**v0.7**
+当前版本：**v0.8**
 
 ---
 
@@ -201,6 +201,16 @@ code-detector -lang go,python -verbose D:\projects\myapp
 | `hash` | 内容哈希 | 函数内容 SHA256 哈希（前 16 字节，用于去重判断） |
 | `call_count` | 调用总次数 | 函数内部调用次数（含重复调用同一函数） |
 | `nesting_depth` | 嵌套深度 | 最大括号嵌套层级 |
+| `parameters` | 参数列表 | 函数参数定义字符串，如 `(a int, b string)` |
+| `return_types` | 返回类型 | 返回值类型，如 `(int, error)` |
+| `receiver` | 接收器 | 方法接收器，如 `(s *Server)` |
+| `is_method` | 是否为方法 | `1` 为方法，`0` 为普通函数 |
+| `visibility` | 可见性 | `public` 或 `private`（基于首字母大小写） |
+| `cyclomatic` | 圈复杂度 | McCabe 圈复杂度（if/for/switch/case/&&/|| 计数） |
+| `parameter_count` | 参数个数 | 函数参数数量 |
+| `return_count` | return 语句数 | 函数体中 return 语句的数量 |
+| `statement_count` | 语句数 | 函数体中的语句总数 |
+| `anonymous_funcs` | 匿名函数数 | 函数内部包含的匿名函数/闭包数量 |
 
 ---
 
@@ -241,6 +251,40 @@ code-detector -lang go,python -verbose D:\projects\myapp
 | `hash` | 文件哈希 | 文件内容的 SHA256 哈希值 |
 | `session_id` | 所属会话 ID | 关联 `scan_sessions.id` |
 
+### `file_metrics` — 文件统计表（AST 增强）
+
+| DB 字段 | 中文说明 | 说明 |
+|---------|---------|------|
+| `file_path` | 文件路径 | 相对于项目根目录的路径 |
+| `language` | 编程语言 | 语言内部名称 |
+| `total_lines` | 文件总行数 | 文件最大函数结束行 |
+| `func_count` | 函数数量 | 文件中的函数/方法总数 |
+| `type_count` | 类型定义数 | 文件中的结构体/接口等类型定义数 |
+| `avg_cyclomatic` | 平均圈复杂度 | 文件内函数的平均圈复杂度 |
+| `max_cyclomatic` | 最高圈复杂度 | 文件内函数的最大圈复杂度 |
+| `total_parameters` | 参数总数 | 文件内所有函数的参数数量之和 |
+| `max_parameters` | 最大参数数 | 文件内单函数的最大参数数量 |
+| `total_returns` | return 总数 | 文件内所有函数的 return 语句数之和 |
+| `total_statements` | 语句总数 | 文件内所有函数的语句数之和 |
+| `total_anon_funcs` | 匿名函数总数 | 文件内所有函数包含的匿名函数数之和 |
+| `public_funcs` | 公开函数数 | 公开（public）函数数量 |
+| `private_funcs` | 私有函数数 | 私有（private）函数数量 |
+| `methods_count` | 方法数 | 文件中方法（method）的数量 |
+
+### `type_defs` — 类型定义表（AST 增强）
+
+| DB 字段 | 中文说明 | 说明 |
+|---------|---------|------|
+| `name` | 类型名 | 类型定义名称 |
+| `kind` | 类型种类 | 类型类别：`struct` / `interface` / `alias` / `enum` |
+| `language` | 编程语言 | 语言内部名称 |
+| `package_name` | 包名/命名空间 | 所属包或命名空间 |
+| `file_path` | 文件路径 | 相对于项目根目录的路径 |
+| `line_start` | 起始行号 | 类型定义起始行 |
+| `line_end` | 结束行号 | 类型定义结束行 |
+| `body` | 类型体源码 | 类型定义的完整源代码 |
+| `fields` | 字段描述 | 结构化字段描述（JSON 格式） |
+
 ## 查询模式（`-query`）
 
 无需重新扫描，直接读取已有 SQLite 数据库进行分析，支持对扫描结果的离线审计。
@@ -261,6 +305,11 @@ code-detector -query <模式> [-db <数据库路径>] [-format text|json]
 | `missing` | 列出被调用但找不到定义的函数名（用于发现依赖缺失） | `-query missing` |
 | `top=N` | 列出行数最多的 N 个函数（超大函数风险分析） | `-query top=10` |
 | `deep=N` | 列出嵌套深度 >= N 的函数（复杂度分析） | `-query deep=3` |
+| `complexity=N` | 🆕 列出圈复杂度最高的 N 个函数 | `-query complexity=5` |
+| `params=N` | 🆕 列出参数数量 >= N 的函数 | `-query params=5` |
+| `anon` | 🆕 列出包含匿名函数/闭包的函数 | `-query anon` |
+| `files` | 🆕 文件级统计：函数数/圈复杂度/参数/return/可见性分布 | `-query files` |
+| `types` | 🆕 列出所有类型定义（struct/interface） | `-query types` |
 
 **批量查询示例** — 同时查看多个函数详情：
 ```cmd
@@ -323,3 +372,11 @@ make build
 ## 许可证
 
 本项目基于 [MIT 许可证](LICENSE) 开源。
+
+## 致谢
+
+本项目使用了 [tree-sitter](https://tree-sitter.github.io/) — 强大的增量解析框架，
+其核心及各语言语法解析器均基于 MIT 许可证发布。
+
+- tree-sitter © 2018 Max Brunsfeld — [MIT](https://github.com/tree-sitter/tree-sitter/blob/master/LICENSE)
+- go-tree-sitter © 2019 Maxim Sukharev — [MIT](https://github.com/smacker/go-tree-sitter/blob/master/LICENSE)

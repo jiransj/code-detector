@@ -5,12 +5,25 @@ setlocal enabledelayedexpansion
 :: code-detector -- Windows Build Script
 :: Usage: build.bat [target]
 :: ===========================================================================
+:: 注意: tree-sitter AST 解析器需要 CGO，构建时需要 GCC (MinGW-w64)
+:: ===========================================================================
 
 set BINARY=code-detector.exe
 set OUTPUT_DIR=build
 
+:: ── 自动检测 MinGW-w64 PATH（tree-sitter CGO 构建需要） ──────────────
+set "MINGW_PATH=%LOCALAPPDATA%\Microsoft\WinGet\Packages\BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe\mingw64\bin"
+if exist "%MINGW_PATH%\gcc.exe" (
+    set "PATH=%MINGW_PATH%;%PATH%"
+) else if exist "C:\mingw64\bin\gcc.exe" (
+    set "PATH=C:\mingw64\bin;%PATH%"
+) else if exist "C:\MinGW\bin\gcc.exe" (
+    set "PATH=C:\MinGW\bin;%PATH%"
+)
+set CGO_ENABLED=1
+
 echo.
-echo ===== code-detector - Build Tool =====
+echo ===== code-detector v0.8 - Build Tool =====
 echo.
 
 if "%1"=="clean" goto :clean
