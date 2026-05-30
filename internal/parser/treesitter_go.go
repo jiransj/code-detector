@@ -123,18 +123,18 @@ func (p *TreeSitterGoParser) Globals(filePath string, content []byte) ([]*model.
 	var results []*model.GlobalVariable
 
 	// 只提取顶层 var/const（parent == source_file），排除函数体内的局部变量
-	tsEachTopLevel(root, qVar, content, func(name, typeStr string) {
+	tsEachTopLevel(root, qVar, content, func(name, typeStr string, lineNum int) {
 		results = append(results, &model.GlobalVariable{
 			Name: name, VarType: typeStr, Language: "go",
 			PackageName: pkgName, Visibility: visibilityFromName(name),
-			FilePath: filepath.ToSlash(filePath), IsConst: false,
+			FilePath: filepath.ToSlash(filePath), LineNum: lineNum, IsConst: false,
 		})
 	})
-	tsEachTopLevel(root, qConst, content, func(name, typeStr string) {
+	tsEachTopLevel(root, qConst, content, func(name, typeStr string, lineNum int) {
 		results = append(results, &model.GlobalVariable{
 			Name: name, VarType: typeStr, Language: "go",
 			PackageName: pkgName, Visibility: visibilityFromName(name),
-			FilePath: filepath.ToSlash(filePath), IsConst: true,
+			FilePath: filepath.ToSlash(filePath), LineNum: lineNum, IsConst: true,
 		})
 	})
 
@@ -153,7 +153,9 @@ func visibilityFromName(name string) string {
 }
 
 // tsEachTopLevel 只匹配 source_file 直接子级的 var/const 声明（排除局部变量）
-func tsEachTopLevel(root *sitter.Node, queryStr string, content []byte, fn func(name, typeStr string)) {
+// 注意：一个 match 中可能包含多个 name/type 对（如 var (a int; b string)），
+// 因此需要收集所有 (name, type, line) 三元组并逐个回调。
+func tsEachTopLevel(root *sitter.Node, queryStr string, content []byte, fn func(name, typeStr string, lineNum int)) {
 	q := getCachedQuery(queryStr)
 	if q == nil {
 		return
@@ -172,8 +174,14 @@ func tsEachTopLevel(root *sitter.Node, queryStr string, content []byte, fn func(
 			break
 		}
 
-		var name, typeStr string
 		var isTopLevel bool
+		// 一个 match 中可能有多个 name/type/line 组合（grouped var/const）
+		type triplet struct {
+			name    string
+			typeStr string
+			lineNum int
+		}
+		var pairs []triplet
 		for _, c := range m.Captures {
 			if c.Node == nil {
 				continue
@@ -183,13 +191,22 @@ func tsEachTopLevel(root *sitter.Node, queryStr string, content []byte, fn func(
 				parent := c.Node.Parent()
 				isTopLevel = parent != nil && parent.Type() == "source_file"
 			case "name":
-				name = strings.TrimSpace(c.Node.Content(content))
+				pairs = append(pairs, triplet{
+					name:    strings.TrimSpace(c.Node.Content(content)),
+					lineNum: int(c.Node.StartPoint().Row) + 1,
+				})
 			case "type":
-				typeStr = strings.TrimSpace(c.Node.Content(content))
+				if len(pairs) > 0 {
+					pairs[len(pairs)-1].typeStr = strings.TrimSpace(c.Node.Content(content))
+				}
 			}
 		}
-		if name != "" && isTopLevel {
-			fn(name, typeStr)
+		if isTopLevel {
+			for _, p := range pairs {
+				if p.name != "" {
+					fn(p.name, p.typeStr, p.lineNum)
+				}
+			}
 		}
 	}
 }
