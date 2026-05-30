@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	sitter "github.com/smacker/go-tree-sitter"
 	tscpp "github.com/smacker/go-tree-sitter/cpp"
@@ -234,13 +235,26 @@ func (p *TreeSitterParser) Globals(filePath string, content []byte) ([]*model.Gl
 	return nil, nil
 }
 
+// allParserPool 复用多语言 tree-sitter Parser 对象
+// 注意：每个 Parser 取出后需调用 SetLanguage 设置当前语言
+var allParserPool = sync.Pool{
+	New: func() interface{} {
+		p := sitter.NewParser()
+		if p == nil {
+			return nil
+		}
+		return p
+	},
+}
+
 // ─── 通用树操作 ──────────────────────────────────────
 
 func tsParseRootFor(content []byte, lang *sitter.Language) (*sitter.Node, error) {
-	p := sitter.NewParser()
+	p := allParserPool.Get().(*sitter.Parser)
 	if p == nil {
 		return nil, fmt.Errorf("NewParser failed")
 	}
+	defer allParserPool.Put(p)
 	p.SetLanguage(lang)
 	tree, err := p.ParseCtx(tsCtx, nil, content)
 	if err != nil || tree == nil {
