@@ -3,6 +3,7 @@ package fscanner
 import (
 	"bytes"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -164,7 +165,7 @@ func (s *Scanner) collectFiles(absRoot string, tempPrefix string, result *model.
 	var files []string
 	var seenFileInfos []os.FileInfo
 
-	err := filepath.Walk(absRoot, func(path string, fi os.FileInfo, err error) error {
+	err := filepath.WalkDir(absRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			if s.Verbose {
 				fmt.Fprintf(os.Stderr, "warn: error accessing %s: %v\n", path, err)
@@ -172,8 +173,8 @@ func (s *Scanner) collectFiles(absRoot string, tempPrefix string, result *model.
 			return nil
 		}
 
-		if fi.IsDir() {
-			dirName := fi.Name()
+		if d.IsDir() {
+			dirName := d.Name()
 			if s.SkipDirs[dirName] || strings.HasPrefix(dirName, ".") && dirName != "." {
 				return filepath.SkipDir
 			}
@@ -190,9 +191,14 @@ func (s *Scanner) collectFiles(absRoot string, tempPrefix string, result *model.
 			return nil
 		}
 
-		if fi.Size() > s.MaxFileSize {
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+
+		if info.Size() > s.MaxFileSize {
 			if s.Verbose {
-				fmt.Fprintf(os.Stderr, "skip large file: %s (%d bytes)\n", path, fi.Size())
+				fmt.Fprintf(os.Stderr, "skip large file: %s (%d bytes)\n", path, info.Size())
 			}
 			result.SkipCount++
 			return nil
@@ -209,21 +215,21 @@ func (s *Scanner) collectFiles(absRoot string, tempPrefix string, result *model.
 		}
 
 		for _, seen := range seenFileInfos {
-			if os.SameFile(fi, seen) {
+			if os.SameFile(info, seen) {
 				if s.Verbose {
 					fmt.Fprintf(os.Stderr, "skip duplicate (hardlink): %s\n", path)
 				}
 				return nil
 			}
 		}
-		seenFileInfos = append(seenFileInfos, fi)
+		seenFileInfos = append(seenFileInfos, info)
 
 		if s.Incremental {
 			cachedMtime, _, found, err := s.Store.GetFileCache(path)
 			if err != nil && s.Verbose {
 				fmt.Fprintf(os.Stderr, "warn: cache lookup failed for %s: %v\n", path, err)
 			}
-			if found && cachedMtime == fi.ModTime().Unix() {
+			if found && cachedMtime == info.ModTime().Unix() {
 				if s.Verbose {
 					fmt.Fprintf(os.Stderr, "skip (cached): %s\n", path)
 				}
