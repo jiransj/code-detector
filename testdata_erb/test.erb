@@ -1,14 +1,27 @@
-<!DOCTYPE html>
+<!-- test.erb: ERB template with Ruby function definitions and calls -->
+<%# 这是一个 ERB 模板 %>
 <html>
 <head>
   <title><%= @title %></title>
 </head>
 <body>
   <h1>Welcome</h1>
+  <%# helper function definition %>
+  <% def format_name(user) %>
+    <strong><%= user.name.upcase %></strong>
+  <% end %>
+
+  <%# another helper %>
+  <% def render_item(item, opts = {}) %>
+    <li class="<%= opts[:css_class] %>">
+      <%= item.name %>
+    </li>
+  <% end %>
+
   <% if @items.any? %>
     <ul>
     <% @items.each do |item| %>
-      <li><%= item.name %></li>
+      <li><%= format_name(item) %></li>
     <% end %>
     </ul>
   <% end %>

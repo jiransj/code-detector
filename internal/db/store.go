@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"encoding/json"
 	"hash/fnv"
 	"database/sql"
 	"fmt"
@@ -24,6 +25,7 @@ type Store struct {
 	funcMu      sync.Mutex // [2] 保护函数批量写入
 	depsMu      sync.Mutex // [3] 保护依赖关系批量写入
 	globalVarMu sync.Mutex // [4] 保护全局变量批量写入
+	astCacheMu  sync.Mutex // [5] 保护 AST 缓存写入（多 worker 并发冲突）
 
 	// 缓存预处理语句，避免每次批次重新 prepare
 	funcInsertStmt      *sql.Stmt
@@ -597,6 +599,65 @@ func (s *Store) UpsertFileCache(filePath string, mtime int64, hash string, sessi
 	)
 	if err != nil {
 		return fmt.Errorf("upsert file cache: %w", err)
+	}
+	return nil
+}
+
+// ---- AST 结果缓存（内容不变时跳过 tree-sitter 解析） ----
+
+// GetASTCache 查询缓存的 AST 解析结果
+// 返回 (functions, globals, found, error)
+// contentHash 是文件内容的 FNV-1a 哈希（十六进制）
+func (s *Store) GetASTCache(filePath, contentHash string) ([]*model.Function, []*model.GlobalVariable, bool, error) {
+	row := s.DB.QueryRow(
+		`SELECT funcs_json, globals_json FROM ast_cache WHERE file_path = ? AND content_hash = ?`,
+		filePath, contentHash,
+	)
+	var funcsJSON, globalsJSON string
+	err := row.Scan(&funcsJSON, &globalsJSON)
+	if err == sql.ErrNoRows {
+		return nil, nil, false, nil
+	}
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("query ast cache: %w", err)
+	}
+
+	var funcs []*model.Function
+	if err := json.Unmarshal([]byte(funcsJSON), &funcs); err != nil {
+		return nil, nil, false, fmt.Errorf("unmarshal funcs cache: %w", err)
+	}
+	var globals []*model.GlobalVariable
+	if err := json.Unmarshal([]byte(globalsJSON), &globals); err != nil {
+		return nil, nil, false, fmt.Errorf("unmarshal globals cache: %w", err)
+	}
+	return funcs, globals, true, nil
+}
+
+// UpsertASTCache 写入或更新 AST 解析结果缓存
+func (s *Store) UpsertASTCache(filePath, contentHash string, funcs []*model.Function, globals []*model.GlobalVariable) error {
+	funcsJSON, err := json.Marshal(funcs)
+	if err != nil {
+		return fmt.Errorf("marshal funcs cache: %w", err)
+	}
+	globalsJSON, err := json.Marshal(globals)
+	if err != nil {
+		return fmt.Errorf("marshal globals cache: %w", err)
+	}
+
+	s.astCacheMu.Lock()
+	defer s.astCacheMu.Unlock()
+	_, err = s.DB.Exec(
+		`INSERT INTO ast_cache (file_path, content_hash, funcs_json, globals_json, updated_at)
+		 VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT(file_path) DO UPDATE SET
+		   content_hash=excluded.content_hash,
+		   funcs_json=excluded.funcs_json,
+		   globals_json=excluded.globals_json,
+		   updated_at=excluded.updated_at`,
+		filePath, contentHash, string(funcsJSON), string(globalsJSON), time.Now().Unix(),
+	)
+	if err != nil {
+		return fmt.Errorf("upsert ast cache: %w", err)
 	}
 	return nil
 }

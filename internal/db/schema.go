@@ -108,6 +108,15 @@ const (
 	createIndexVarName    = `CREATE INDEX IF NOT EXISTS idx_global_vars_name ON global_vars(name);`
 	createIndexVarLang    = `CREATE INDEX IF NOT EXISTS idx_global_vars_lang ON global_vars(language);`
 
+	createASTCacheTable = `
+	CREATE TABLE IF NOT EXISTS ast_cache (
+		file_path    TEXT    PRIMARY KEY,
+		content_hash TEXT    NOT NULL,
+		funcs_json   TEXT    DEFAULT '[]',
+		globals_json TEXT    DEFAULT '[]',
+		updated_at   INTEGER NOT NULL
+	);`
+
 	createFileCacheTable = `
 	CREATE TABLE IF NOT EXISTS file_cache (
 		file_path   TEXT    PRIMARY KEY,
@@ -164,6 +173,7 @@ func InitDB(dbPath string) (*sql.DB, error) {
 		createFileMetricsTable,
 		createTypeDefsTable,
 		createFileCacheTable,
+		createASTCacheTable,
 	}
 	for _, stmt := range tables {
 		if _, err := db.Exec(stmt); err != nil {

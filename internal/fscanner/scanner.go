@@ -3,6 +3,7 @@ package fscanner
 import (
 	"bytes"
 	"fmt"
+	"hash/fnv"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -478,6 +479,22 @@ func (s *Scanner) parseFile(path string) ([]*model.Function, []*model.GlobalVari
 		return nil, nil, nil
 	}
 
+	// 计算内容哈希用于 AST 缓存
+	h := fnv.New64a()
+	h.Write(content)
+	hash := fmt.Sprintf("%x", h.Sum(nil))
+
+	// 检查 AST 缓存（内容不变时跳过 tree-sitter 解析）
+	if s.Store != nil {
+		cachedFuncs, cachedGlobals, found, err := s.Store.GetASTCache(path, hash)
+		if err == nil && found {
+			if s.Verbose {
+				fmt.Fprintf(os.Stderr, "ast-cache hit: %s\n", path)
+			}
+			return cachedFuncs, cachedGlobals, nil
+		}
+	}
+
 	// 解析函数
 	funcs, err := p.Parse(path, content)
 	if err != nil {
@@ -491,6 +508,13 @@ func (s *Scanner) parseFile(path string) ([]*model.Function, []*model.GlobalVari
 			fmt.Fprintf(os.Stderr, "warn: 全局变量解析失败 %s: %v\n", path, err)
 		}
 		globals = nil
+	}
+
+	// 写入 AST 缓存（非阻塞）
+	if s.Store != nil {
+		if cacheErr := s.Store.UpsertASTCache(path, hash, funcs, globals); cacheErr != nil && s.Verbose {
+			fmt.Fprintf(os.Stderr, "warn: ast-cache write failed %s: %v\n", path, cacheErr)
+		}
 	}
 
 	return funcs, globals, nil
