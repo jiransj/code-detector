@@ -15,6 +15,7 @@ import (
 	"code-detector/internal/config"
 	"code-detector/internal/db"
 	"code-detector/internal/fscanner"
+	mcp "code-detector/internal/mcp"
 	"code-detector/internal/model"
 	"code-detector/internal/parser"
 )
@@ -387,10 +388,22 @@ func printCallGraph(buildGraph bool, store *db.Store, result *model.ScanResult) 
 func main() {
 	defer waitForExit()
 
-	dbPath, cfgPath, langs, skipDirs, verbose, showVer, workers, buildGraph, incremental, maxSize, debug, queryMode := parseFlags()
+	dbPath, cfgPath, langs, skipDirs, verbose, showVer, workers, buildGraph, incremental, maxSize, debug, queryMode, mcpMode := parseFlags()
 	if showVer {
 		noWait = true
 		fmt.Printf("code-detector v%s\n", version)
+		return
+	}
+
+	// MCP 服务器模式：以 MCP 协议提供数据服务
+	if mcpMode {
+		noWait = true
+		store := initDB(dbPath, verbose)
+		cleanup = func() { store.Close() }
+		defer cleanup()
+		if err := mcp.RunStdioServer(store); err != nil {
+			fatal("MCP 服务器错误: %v", err)
+		}
 		return
 	}
 
@@ -436,7 +449,7 @@ func main() {
 }
 
 // parseFlags 解析命令行参数
-func parseFlags() (dbPath string, cfgPath string, langs string, skipDirs string, verbose bool, showVer bool, workers int, buildGraph bool, incremental bool, maxSize int64, debug bool, queryMode string) {
+func parseFlags() (dbPath string, cfgPath string, langs string, skipDirs string, verbose bool, showVer bool, workers int, buildGraph bool, incremental bool, maxSize int64, debug bool, queryMode string, mcpMode bool) {
 	flag.StringVar(&langs, "lang", "", "扫描语言，逗号分隔 (如 go,py,java)")
 	flag.StringVar(&dbPath, "db", "scaned_db/scan_result.db", "SQLite 数据库路径（默认 scaned_db/ 目录下）")
 	flag.StringVar(&cfgPath, "config", "config.yaml", "配置文件路径")
@@ -448,6 +461,7 @@ func parseFlags() (dbPath string, cfgPath string, langs string, skipDirs string,
 	flag.IntVar(&workers, "workers", 0, "并发工作数 (默认 CPU 核数)")
 	flag.BoolVar(&buildGraph, "graph", false, "扫描完成后构建调用图并输出统计")
 	flag.BoolVar(&incremental, "incremental", false, "增量扫描：仅重新解析 mtime 变更的文件")
+	flag.BoolVar(&mcpMode, "mcp", false, "以 MCP 协议模式启动服务器（通过 stdio 提供函数查询服务）")
 	flag.StringVar(&queryMode, "query", "", "查询模式：读取已有数据库而不扫描")
 	flag.StringVar(&outputFormat, "format", "text", "输出格式: text (默认) 或 json")
 	flag.Usage = func() {
@@ -465,6 +479,7 @@ func parseFlags() (dbPath string, cfgPath string, langs string, skipDirs string,
   -skip-dirs <列表> 额外跳过目录，逗号分隔
   -workers <N>     并发工作数 (默认 CPU 核数)
   -verbose         输出详细日志
+  -mcp             以 MCP 协议模式启动服务器（通过 stdio 提供函数查询服务）
   -graph           扫描完成后构建调用图并输出统计
   -incremental     增量扫描：仅重新解析 mtime 变更的文件
   -format <格式>   输出格式: text (默认) 或 json
@@ -491,6 +506,7 @@ func parseFlags() (dbPath string, cfgPath string, langs string, skipDirs string,
   code-detector -query func=main
   code-detector -query dead
   code-detector -query top=10
+  code-detector -mcp
 `, version)
 	}
 	flag.Parse()
