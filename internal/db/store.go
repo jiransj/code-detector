@@ -266,11 +266,42 @@ func (s *Store) CheckExistingFuncHashes(sessionID int64, funcs []*model.Function
 
 // BatchInsertFunctions 批量插入函数（事务内），带哈希去重
 // 返回 (新插入的ID列表, 跳过的数量, 变更的数量)
-func (s *Store) BatchInsertFunctions(functions []*model.Function, sessionID int64) ([]int64, int, int, error) {
+// 当 skipHashCheck 为 true（全量扫描）时跳过哈希查询与比对，直接全量写入
+func (s *Store) BatchInsertFunctions(functions []*model.Function, sessionID int64, skipHashCheck bool) ([]int64, int, int, error) {
 	s.funcMu.Lock()
 	defer s.funcMu.Unlock()
 
-	// 先查询已有的函数
+	if skipHashCheck {
+		// 全量扫描：直接批量插入，跳过哈希比对
+		tx, err := s.DB.Begin()
+		if err != nil {
+			return nil, 0, 0, fmt.Errorf("begin tx: %w", err)
+		}
+		defer tx.Rollback()
+
+		stmt := tx.Stmt(s.funcInsertStmt)
+		ids := make([]int64, 0, len(functions))
+
+		for _, f := range functions {
+			f.Hash = FuncHash(f)
+			res, err := stmt.Exec(sessionID, f.Name, f.PackageName, f.Language, f.FilePath, f.LineStart, f.LineEnd, f.Body, f.Hash,
+				f.CallCount, f.NestingDepth,
+				f.Parameters, f.ReturnTypes, f.Receiver, boolToInt(f.IsMethod), f.Visibility,
+				f.Cyclomatic, f.ParameterCount, f.ReturnCount, f.StatementCount, f.AnonymousFuncs)
+			if err != nil {
+				return nil, 0, 0, fmt.Errorf("insert function %s: %w", f.Name, err)
+			}
+			newID, _ := res.LastInsertId()
+			ids = append(ids, newID)
+		}
+
+		if err := tx.Commit(); err != nil {
+			return nil, 0, 0, fmt.Errorf("commit tx: %w", err)
+		}
+		return ids, 0, 0, nil
+	}
+
+	// 增量扫描：先查询已有的函数进行哈希去重
 	existing, hashMap, err := s.CheckExistingFuncHashes(sessionID, functions)
 	if err != nil {
 		return nil, 0, 0, fmt.Errorf("query existing: %w", err)

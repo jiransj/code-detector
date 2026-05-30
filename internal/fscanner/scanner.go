@@ -373,7 +373,7 @@ func (s *Scanner) flushBatch(funcBatch []*model.Function, varBatch []*model.Glob
 	}
 
 	if len(funcBatch) > 0 {
-		ids, skipped, changed, err := s.Store.BatchInsertFunctions(funcBatch, sessionID)
+		ids, skipped, changed, err := s.Store.BatchInsertFunctions(funcBatch, sessionID, !s.Incremental)
 		if err != nil {
 			return fmt.Errorf("batch insert: %w", err)
 		}
