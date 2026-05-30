@@ -120,9 +120,13 @@ func (s *Store) UpdateSession(sessionID int64, duration time.Duration, fileCount
 // InsertFunction 插入一条函数记录，返回函数 ID
 func (s *Store) InsertFunction(f *model.Function, sessionID int64) (int64, error) {
 	res, err := s.DB.Exec(
-		`INSERT INTO functions (session_id, name, package_name, language, file_path, line_start, line_end, body, call_count, nesting_depth)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO functions (session_id, name, package_name, language, file_path, line_start, line_end, body, call_count, nesting_depth,
+		                        parameters, return_types, receiver, is_method, visibility, cyclomatic, parameter_count, return_count, statement_count, anonymous_funcs)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+		         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sessionID, f.Name, f.PackageName, f.Language, f.FilePath, f.LineStart, f.LineEnd, f.Body, f.CallCount, f.NestingDepth,
+		f.Parameters, f.ReturnTypes, f.Receiver, boolToInt(f.IsMethod), f.Visibility,
+		f.Cyclomatic, f.ParameterCount, f.ReturnCount, f.StatementCount, f.AnonymousFuncs,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("insert function: %w", err)
@@ -142,9 +146,13 @@ func (s *Store) InsertDependency(callerID int64, calleeName string) error {
 // FuncHash 计算函数的唯一哈希值
 func FuncHash(f *model.Function) string {
 	sort.Strings(f.Dependencies)
-	data := fmt.Sprintf("%s|%s|%s|%s|%d|%s|%v|%d|%d", f.Name, f.PackageName, f.Language, f.FilePath, f.LineStart, f.Body, f.Dependencies, f.CallCount, f.NestingDepth)
+	data := fmt.Sprintf("%s|%s|%s|%s|%d|%s|%v|%d|%d|%s|%s|%s|%v|%s|%d|%d|%d|%d|%d",
+		f.Name, f.PackageName, f.Language, f.FilePath, f.LineStart, f.Body, f.Dependencies,
+		f.CallCount, f.NestingDepth,
+		f.Parameters, f.ReturnTypes, f.Receiver, f.IsMethod, f.Visibility,
+		f.Cyclomatic, f.ParameterCount, f.ReturnCount, f.StatementCount, f.AnonymousFuncs)
 	h := sha256.Sum256([]byte(data))
-	return fmt.Sprintf("%x", h[:16]) // 前 16 字节足够
+	return fmt.Sprintf("%x", h[:16])
 }
 
 // VarHash 计算全局变量的唯一哈希值
@@ -236,8 +244,10 @@ func (s *Store) BatchInsertFunctions(functions []*model.Function, sessionID int6
 	defer tx.Rollback()
 
 	stmt, err := tx.Prepare(
-		`INSERT INTO functions (session_id, name, package_name, language, file_path, line_start, line_end, body, hash, call_count, nesting_depth)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO functions (session_id, name, package_name, language, file_path, line_start, line_end, body, hash, call_count, nesting_depth,
+		                        parameters, return_types, receiver, is_method, visibility, cyclomatic, parameter_count, return_count, statement_count, anonymous_funcs)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+		         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	)
 	if err != nil {
 		return nil, 0, 0, fmt.Errorf("prepare stmt: %w", err)
@@ -279,7 +289,10 @@ func (s *Store) BatchInsertFunctions(functions []*model.Function, sessionID int6
 		}
 
 		// 插入新记录
-		res, err := stmt.Exec(sessionID, f.Name, f.PackageName, f.Language, f.FilePath, f.LineStart, f.LineEnd, f.Body, hash, f.CallCount, f.NestingDepth)
+		res, err := stmt.Exec(sessionID, f.Name, f.PackageName, f.Language, f.FilePath, f.LineStart, f.LineEnd, f.Body, hash,
+			f.CallCount, f.NestingDepth,
+			f.Parameters, f.ReturnTypes, f.Receiver, boolToInt(f.IsMethod), f.Visibility,
+			f.Cyclomatic, f.ParameterCount, f.ReturnCount, f.StatementCount, f.AnonymousFuncs)
 		if err != nil {
 			return nil, 0, 0, fmt.Errorf("insert function %s: %w", f.Name, err)
 		}
@@ -600,8 +613,82 @@ func (s *Store) Checkpoint() {
 	conn.ExecContext(context.Background(), "PRAGMA wal_checkpoint(TRUNCATE)")
 }
 
+// ComputeFileMetrics 从 functions 表聚合计算文件级指标并写入 file_metrics
+func (s *Store) ComputeFileMetrics(sessionID int64) error {
+	rows, err := s.DB.Query(
+		`SELECT file_path, language,
+		        COUNT(*) AS func_count,
+		        SUM(cyclomatic) AS total_cyclomatic,
+		        MAX(cyclomatic) AS max_cyclomatic,
+		        AVG(CAST(cyclomatic AS REAL)) AS avg_cyclomatic,
+		        SUM(parameter_count) AS total_params,
+		        MAX(parameter_count) AS max_params,
+		        SUM(return_count) AS total_returns,
+		        SUM(statement_count) AS total_stmts,
+		        SUM(anonymous_funcs) AS total_anon,
+		        SUM(CASE WHEN visibility = 'public' THEN 1 ELSE 0 END) AS public_cnt,
+		        SUM(CASE WHEN visibility = 'private' THEN 1 ELSE 0 END) AS private_cnt,
+		        SUM(CASE WHEN is_method = 1 THEN 1 ELSE 0 END) AS methods_cnt,
+		        MAX(line_end) AS max_line
+		 FROM functions WHERE session_id = ?
+		 GROUP BY file_path, language`, sessionID,
+	)
+	if err != nil {
+		return fmt.Errorf("query file metrics: %w", err)
+	}
+	defer rows.Close()
+
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	// 清除旧数据
+	if _, err := tx.Exec(`DELETE FROM file_metrics WHERE session_id = ?`, sessionID); err != nil {
+		return fmt.Errorf("delete old metrics: %w", err)
+	}
+
+	stmt, err := tx.Prepare(
+		`INSERT INTO file_metrics (session_id, file_path, language, func_count, total_lines,
+		 avg_cyclomatic, max_cyclomatic, total_parameters, max_parameters,
+		 total_returns, total_statements, total_anon_funcs,
+		 public_funcs, private_funcs, methods_count)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	)
+	if err != nil {
+		return fmt.Errorf("prepare: %w", err)
+	}
+	defer stmt.Close()
+
+	for rows.Next() {
+		var fp, lang string
+		var funcCnt, totalCyc, maxCyc, totalParams, maxParams, totalRets, totalStmts, totalAnon, pubCnt, privCnt, methodsCnt, maxLine int
+		var avgCyc float64
+		if err := rows.Scan(&fp, &lang, &funcCnt, &totalCyc, &maxCyc, &avgCyc, &totalParams, &maxParams, &totalRets, &totalStmts, &totalAnon, &pubCnt, &privCnt, &methodsCnt, &maxLine); err != nil {
+			return fmt.Errorf("scan: %w", err)
+		}
+		if _, err := stmt.Exec(sessionID, fp, lang, funcCnt, maxLine,
+			avgCyc, maxCyc, totalParams, maxParams,
+			totalRets, totalStmts, totalAnon,
+			pubCnt, privCnt, methodsCnt,
+		); err != nil {
+			return fmt.Errorf("insert: %w", err)
+		}
+	}
+	return tx.Commit()
+}
+
 // Close 关闭数据库连接
 func (s *Store) Close() error {
 	s.Checkpoint()
 	return s.DB.Close()
+}
+
+// boolToInt 布尔值转 0/1
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }

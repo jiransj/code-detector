@@ -8,7 +8,7 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
-  <img src="https://img.shields.io/badge/version-v0.7-brightgreen.svg" alt="Version v0.7">
+  <img src="https://img.shields.io/badge/version-v0.8-brightgreen.svg" alt="Version v0.8">
   <img src="https://img.shields.io/badge/go-1.26-blue.svg" alt="Go 1.26">
   <img src="https://img.shields.io/badge/platform-windows%20%7C%20linux-lightgrey.svg" alt="Platform">
 </p>
@@ -24,7 +24,7 @@
 - **Advantage**: Review project robustness from a function-level perspective — evaluate function quality and detect duplicate/reinvented functionality
 - Eliminate irrelevant context interference, providing excellent support for code agents
 
-Current version: **v0.7**
+Current version: **v0.8**
 
 ---
 
@@ -201,6 +201,16 @@ Scan results are stored by default in `scaned_db/scan_result.db` (SQLite databas
 | `hash` | SHA256 content hash (first 16 bytes, used for deduplication) |
 | `call_count` | Total number of internal function calls (including duplicate calls) |
 | `nesting_depth` | Maximum bracket nesting depth |
+| `parameters` | Function parameter list string, e.g. `(a int, b string)` |
+| `return_types` | Return type string, e.g. `(int, error)` |
+| `receiver` | Method receiver, e.g. `(s *Server)` |
+| `is_method` | Whether it is a method (`1` = method, `0` = function) |
+| `visibility` | `public` or `private` (based on first letter case) |
+| `cyclomatic` | McCabe cyclomatic complexity (counts if/for/switch/case/&&/||) |
+| `parameter_count` | Number of function parameters |
+| `return_count` | Number of return statements in the function body |
+| `statement_count` | Total number of statements in the function body |
+| `anonymous_funcs` | Number of anonymous functions/closures inside the function |
 
 ---
 
@@ -241,6 +251,40 @@ Scan results are stored by default in `scaned_db/scan_result.db` (SQLite databas
 | `hash` | SHA256 hash of the file content |
 | `session_id` | Associated session ID, references `scan_sessions.id` |
 
+### `file_metrics` — File Metrics Table (AST Enhanced)
+
+| DB Field | Description |
+|----------|-------------|
+| `file_path` | File path relative to the project root |
+| `language` | Programming language |
+| `total_lines` | Total lines in the file (max function end line) |
+| `func_count` | Total number of functions/methods in the file |
+| `type_count` | Number of type definitions (structs/interfaces) |
+| `avg_cyclomatic` | Average cyclomatic complexity of functions in the file |
+| `max_cyclomatic` | Maximum cyclomatic complexity in the file |
+| `total_parameters` | Sum of all function parameters in the file |
+| `max_parameters` | Maximum parameter count of a single function |
+| `total_returns` | Sum of all return statements in the file |
+| `total_statements` | Sum of all statements in the file |
+| `total_anon_funcs` | Total number of anonymous functions/closures |
+| `public_funcs` | Number of public functions |
+| `private_funcs` | Number of private functions |
+| `methods_count` | Number of methods in the file |
+
+### `type_defs` — Type Definitions Table (AST Enhanced)
+
+| DB Field | Description |
+|----------|-------------|
+| `name` | Type definition name |
+| `kind` | Type kind: `struct` / `interface` / `alias` / `enum` |
+| `language` | Programming language |
+| `package_name` | Package or namespace |
+| `file_path` | File path relative to the project root |
+| `line_start` | Start line of the type definition |
+| `line_end` | End line of the type definition |
+| `body` | Complete source code of the type definition |
+| `fields` | Structured field description (JSON format) |
+
 When the `-graph` option is enabled, a call graph statistical summary is printed to the terminal.
 
 ---
@@ -265,6 +309,11 @@ code-detector -query <mode> [-db <database_path>] [-format text|json]
 | `missing` | List called functions that have no definition (dependency analysis) | `-query missing` |
 | `top=N` | List the N largest functions by line count (risk analysis for oversized functions) | `-query top=10` |
 | `deep=N` | List functions with nesting depth >= N (complexity analysis) | `-query deep=3` |
+| `complexity=N` | 🆕 List top N functions by cyclomatic complexity | `-query complexity=5` |
+| `params=N` | 🆕 List functions with parameter count >= N | `-query params=5` |
+| `anon` | 🆕 List functions containing anonymous functions/closures | `-query anon` |
+| `files` | 🆕 File-level statistics: func count / complexity / params / returns / visibility | `-query files` |
+| `types` | 🆕 List all type definitions (struct/interface) | `-query types` |
 
 **Batch query example** — inspect multiple functions at once:
 ```cmd
@@ -325,3 +374,11 @@ The build output is `code-detector.exe` (Windows) or `code-detector` (Linux/macO
 ## License
 
 This project is open source under the [MIT License](LICENSE).
+
+## Acknowledgements
+
+This project uses [tree-sitter](https://tree-sitter.github.io/) — a powerful incremental parsing framework.
+Its core and all language grammar parsers are released under the MIT License.
+
+- tree-sitter © 2018 Max Brunsfeld — [MIT](https://github.com/tree-sitter/tree-sitter/blob/master/LICENSE)
+- go-tree-sitter © 2019 Maxim Sukharev — [MIT](https://github.com/smacker/go-tree-sitter/blob/master/LICENSE)

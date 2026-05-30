@@ -23,15 +23,15 @@ const (
 
 	createFunctionsTable = `
 	CREATE TABLE IF NOT EXISTS functions (
-		id         INTEGER PRIMARY KEY AUTOINCREMENT,
-		session_id INTEGER NOT NULL,
-		name       TEXT    NOT NULL,
-		language   TEXT    NOT NULL,
-		file_path  TEXT    NOT NULL,
-		line_start INTEGER DEFAULT 0,
-		line_end   INTEGER DEFAULT 0,
-		body       TEXT    DEFAULT '',
-		hash       TEXT    DEFAULT '',
+		id              INTEGER PRIMARY KEY AUTOINCREMENT,
+		session_id      INTEGER NOT NULL,
+		name            TEXT    NOT NULL,
+		language        TEXT    NOT NULL,
+		file_path       TEXT    NOT NULL,
+		line_start      INTEGER DEFAULT 0,
+		line_end        INTEGER DEFAULT 0,
+		body            TEXT    DEFAULT '',
+		hash            TEXT    DEFAULT '',
 		FOREIGN KEY (session_id) REFERENCES scan_sessions(id)
 	);`
 
@@ -43,12 +43,6 @@ const (
 		UNIQUE(caller_id, callee_name),
 		FOREIGN KEY (caller_id) REFERENCES functions(id)
 	);`
-
-	createIndexFuncName = `CREATE INDEX IF NOT EXISTS idx_functions_name  ON functions(name);`
-	createIndexFuncLang = `CREATE INDEX IF NOT EXISTS idx_functions_lang  ON functions(language);`
-	createIndexFuncFile = `CREATE INDEX IF NOT EXISTS idx_functions_file ON functions(file_path);`
-	createIndexDepCall  = `CREATE INDEX IF NOT EXISTS idx_deps_caller   ON function_deps(caller_id);`
-	createIndexDepCallee = `CREATE INDEX IF NOT EXISTS idx_deps_callee  ON function_deps(callee_name);`
 
 	createGlobalVarsTable = `
 	CREATE TABLE IF NOT EXISTS global_vars (
@@ -64,8 +58,55 @@ const (
 		FOREIGN KEY (session_id) REFERENCES scan_sessions(id)
 	);`
 
-	createIndexVarName = `CREATE INDEX IF NOT EXISTS idx_global_vars_name  ON global_vars(name);`
-	createIndexVarLang = `CREATE INDEX IF NOT EXISTS idx_global_vars_lang  ON global_vars(language);`
+	createFileMetricsTable = `
+	CREATE TABLE IF NOT EXISTS file_metrics (
+		id              INTEGER PRIMARY KEY AUTOINCREMENT,
+		session_id      INTEGER NOT NULL,
+		file_path       TEXT    NOT NULL UNIQUE,
+		language        TEXT    NOT NULL,
+		total_lines     INTEGER DEFAULT 0,
+		code_lines      INTEGER DEFAULT 0,
+		comment_lines   INTEGER DEFAULT 0,
+		blank_lines     INTEGER DEFAULT 0,
+		func_count      INTEGER DEFAULT 0,
+		type_count      INTEGER DEFAULT 0,
+		avg_cyclomatic  REAL    DEFAULT 0.0,
+		max_cyclomatic  INTEGER DEFAULT 0,
+		total_parameters INTEGER DEFAULT 0,
+		max_parameters   INTEGER DEFAULT 0,
+		total_returns   INTEGER DEFAULT 0,
+		total_statements INTEGER DEFAULT 0,
+		total_anon_funcs INTEGER DEFAULT 0,
+		public_funcs    INTEGER DEFAULT 0,
+		private_funcs   INTEGER DEFAULT 0,
+		methods_count   INTEGER DEFAULT 0,
+		FOREIGN KEY (session_id) REFERENCES scan_sessions(id)
+	);`
+
+	createTypeDefsTable = `
+	CREATE TABLE IF NOT EXISTS type_defs (
+		id          INTEGER PRIMARY KEY AUTOINCREMENT,
+		session_id  INTEGER NOT NULL,
+		name        TEXT    NOT NULL,
+		kind        TEXT    DEFAULT '',
+		language    TEXT    NOT NULL,
+		package_name TEXT   DEFAULT '',
+		file_path   TEXT    NOT NULL,
+		line_start  INTEGER DEFAULT 0,
+		line_end    INTEGER DEFAULT 0,
+		body        TEXT    DEFAULT '',
+		fields      TEXT    DEFAULT '',
+		FOREIGN KEY (session_id) REFERENCES scan_sessions(id)
+	);`
+
+	// 索引
+	createIndexFuncName   = `CREATE INDEX IF NOT EXISTS idx_functions_name   ON functions(name);`
+	createIndexFuncLang   = `CREATE INDEX IF NOT EXISTS idx_functions_lang   ON functions(language);`
+	createIndexFuncFile   = `CREATE INDEX IF NOT EXISTS idx_functions_file   ON functions(file_path);`
+	createIndexDepCall    = `CREATE INDEX IF NOT EXISTS idx_deps_caller      ON function_deps(caller_id);`
+	createIndexDepCallee  = `CREATE INDEX IF NOT EXISTS idx_deps_callee      ON function_deps(callee_name);`
+	createIndexVarName    = `CREATE INDEX IF NOT EXISTS idx_global_vars_name ON global_vars(name);`
+	createIndexVarLang    = `CREATE INDEX IF NOT EXISTS idx_global_vars_lang ON global_vars(language);`
 
 	createFileCacheTable = `
 	CREATE TABLE IF NOT EXISTS file_cache (
@@ -77,7 +118,7 @@ const (
 	);`
 )
 
-// columnExists 检查 SQLite 表中是否存在指定列（通过 PRAGMA table_info）
+// columnExists 检查 SQLite 表中是否存在指定列
 func columnExists(db *sql.DB, tableName, columnName string) (bool, error) {
 	rows, err := db.Query("PRAGMA table_info(" + tableName + ")")
 	if err != nil {
@@ -100,14 +141,13 @@ func columnExists(db *sql.DB, tableName, columnName string) (bool, error) {
 	return false, rows.Err()
 }
 
-// InitDB 初始化数据库，创建所有表与索引
+// InitDB 初始化数据库，创建所有表与索引，执行迁移
 func InitDB(dbPath string) (*sql.DB, error) {
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
 
-	// 启用 WAL 模式 — 写入性能好，支持并发读
 	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
 		log.Printf("warn: failed to set WAL mode: %v", err)
 	}
@@ -115,39 +155,58 @@ func InitDB(dbPath string) (*sql.DB, error) {
 		log.Printf("warn: failed to enable foreign keys: %v", err)
 	}
 
-	ddl := []string{
+	// 创建基础表
+	tables := []string{
 		createScanSessionsTable,
 		createFunctionsTable,
 		createFunctionDepsTable,
 		createGlobalVarsTable,
+		createFileMetricsTable,
+		createTypeDefsTable,
 		createFileCacheTable,
-		createIndexFuncName,
-		createIndexFuncLang,
-		createIndexFuncFile,
-		createIndexDepCall,
-		createIndexDepCallee,
-		createIndexVarName,
-		createIndexVarLang,
 	}
-	for _, stmt := range ddl {
+	for _, stmt := range tables {
 		if _, err := db.Exec(stmt); err != nil {
 			return nil, fmt.Errorf("exec schema: %w\nstmt: %s", err, stmt)
 		}
 	}
 
-	// 数据库迁移：为旧数据库补充新列，仅当列不存在时执行
-	type migrationStep struct {
+	// 创建索引
+	indexes := []string{
+		createIndexFuncName, createIndexFuncLang, createIndexFuncFile,
+		createIndexDepCall, createIndexDepCallee,
+		createIndexVarName, createIndexVarLang,
+	}
+	for _, stmt := range indexes {
+		if _, err := db.Exec(stmt); err != nil {
+			log.Printf("warn: create index: %v\nstmt: %s", err, stmt)
+		}
+	}
+
+	// 数据库迁移：为新列补充
+	migrations := []struct {
 		table  string
 		column string
 		stmt   string
-	}
-	migrations := []migrationStep{
+	}{
+		// 已有迁移
 		{"functions", "package_name", `ALTER TABLE functions ADD COLUMN package_name TEXT DEFAULT ''`},
 		{"global_vars", "package_name", `ALTER TABLE global_vars ADD COLUMN package_name TEXT DEFAULT ''`},
-		{"global_vars", "visibility", `ALTER TABLE global_vars ADD COLUMN visibility TEXT DEFAULT ''`},
+		{"global_vars", "visibility",  `ALTER TABLE global_vars ADD COLUMN visibility TEXT DEFAULT ''`},
 		{"scan_sessions", "var_count", `ALTER TABLE scan_sessions ADD COLUMN var_count INTEGER DEFAULT 0`},
-		{"functions", "call_count", `ALTER TABLE functions ADD COLUMN call_count INTEGER DEFAULT 0`},
+		{"functions", "call_count",    `ALTER TABLE functions ADD COLUMN call_count INTEGER DEFAULT 0`},
 		{"functions", "nesting_depth", `ALTER TABLE functions ADD COLUMN nesting_depth INTEGER DEFAULT 0`},
+		// ═══ AST 增强迁移 ═══
+		{"functions", "parameters",     `ALTER TABLE functions ADD COLUMN parameters TEXT DEFAULT ''`},
+		{"functions", "return_types",   `ALTER TABLE functions ADD COLUMN return_types TEXT DEFAULT ''`},
+		{"functions", "receiver",       `ALTER TABLE functions ADD COLUMN receiver TEXT DEFAULT ''`},
+		{"functions", "is_method",      `ALTER TABLE functions ADD COLUMN is_method INTEGER DEFAULT 0`},
+		{"functions", "visibility",     `ALTER TABLE functions ADD COLUMN visibility TEXT DEFAULT ''`},
+		{"functions", "cyclomatic",     `ALTER TABLE functions ADD COLUMN cyclomatic INTEGER DEFAULT 0`},
+		{"functions", "parameter_count", `ALTER TABLE functions ADD COLUMN parameter_count INTEGER DEFAULT 0`},
+		{"functions", "return_count",   `ALTER TABLE functions ADD COLUMN return_count INTEGER DEFAULT 0`},
+		{"functions", "statement_count",`ALTER TABLE functions ADD COLUMN statement_count INTEGER DEFAULT 0`},
+		{"functions", "anonymous_funcs",`ALTER TABLE functions ADD COLUMN anonymous_funcs INTEGER DEFAULT 0`},
 	}
 	for _, m := range migrations {
 		exists, err := columnExists(db, m.table, m.column)
