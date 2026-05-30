@@ -5,6 +5,9 @@ on:
     tags:
       - 'code-detector-v*'
 
+permissions:
+  contents: write
+
 jobs:
   build:
     strategy:
