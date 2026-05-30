@@ -91,17 +91,8 @@
    │   │
    │   ├─ parser.NewRegistry()           ← 创建解析器注册表
    │   ├─ reg.Register(NewGoParser(), ".go")         ← 注册 Go 解析器
-   │   │   └── 解析时调用 treesitter_go.go 的 Tree-sitter API 加速
-   │   ├─ reg.Register(NewPythonParser(), ".py")     ← 注册 Python 解析器
-   │   ├─ reg.Register(NewJavaParser(), ".java")     ← 注册 Java 解析器
-   │   ├─ reg.Register(NewKotlinParser(), ".kt", ...)
-   │   ├─ reg.Register(NewJavascriptParser(), ".js", ...)
-   │   ├─ reg.Register(NewTypescriptParser(), ".ts", ...)
-   │   ├─ reg.Register(NewCSharpParser(), ".cs")
-   │   ├─ reg.Register(NewCPPParser(), ".cpp", ".c", ...)
-   │   ├─ reg.Register(NewRustParser(), ".rs")
-   │   ├─ reg.Register(NewRubyParser(), ".rb")
-   │   ├─ 对配置中的额外语言注册 GenericParser  ← 数据驱动的通用正则解析器
+   │   │   └── 14 种语言的 TS 树结构 → initQueries() 缓存
+   │   ├─ parser.DefaultParsers()                     ← 批量注册全部 14 种语言\n   │   │   ├── NewTreeSitterGoParser()    → 注册 .go        (Go 专用 TS 增强)\n   │   │   ├── NewTreeSitterParser(".py") → 注册 .py        (Python)\n   │   │   ├── NewTreeSitterParser(".java") → 注册 .java    (Java)\n   │   │   ├── NewTreeSitterParser(".js") → 注册 .js/.jsx/.mjs (JavaScript)\n   │   │   ├── NewTreeSitterParser(".cs") → 注册 .cs        (C#)\n   │   │   ├── NewTreeSitterParser(".cpp") → 注册 .cpp/.c/.h 等 (C/C++)\n   │   │   ├── NewTreeSitterParser(".rs") → 注册 .rs        (Rust)\n   │   │   ├── NewTreeSitterParser(".rb") → 注册 .rb        (Ruby)\n   │   │   ├── NewTreeSitterParser(".ts") → 注册 .ts/.tsx   (TypeScript)\n   │   │   ├── NewTreeSitterParser(".swift") → 注册 .swift  (Swift)\n   │   │   ├── NewTreeSitterParser(".kt") → 注册 .kt/.kts   (Kotlin)\n   │   │   ├── NewTreeSitterParser(".php") → 注册 .php      (PHP)\n   │   │   ├── NewTreeSitterParser(".lua") → 注册 .lua      (Lua)\n   │   │   └── NewTreeSitterParser(".scala") → 注册 .scala  (Scala)\n   │   ├─ 对配置中扩展名尚无解析器的语言注册 GenericParser  ← 数据驱动正则兜底
    │   └─ fscanner.New(cfg, reg, store)              ← 组装 Scanner 对象
    │
    ├─ printBanner()          ← 打印启动 UI 横幅
@@ -311,7 +302,7 @@ code-detector/
 │   │   │   ├── tsGoNestingDepth()       ← 嵌套深度
 │   │   │   └── tsFindLine()             ← 行号映射
 │   │   │
-│   │   ├── go_parser.go      ← Go 语言解析器（正则方案，与 TS 并存）
+│   │   ├── go_parser.go      ← Go 语言正则解析器（旧方案，TS 优先时仅作回退）
 │   │   │   ├── ...（同上）
 │   │   │
 │   │   ├── python_parser.go  ← Python 解析器
@@ -410,9 +401,8 @@ main()
 │   │   └── db.NewStore()
 │   ├── initScanner()                   ★ 装配核心
 │   │   ├── parser.NewRegistry()        创建解析器注册表
-│   │   ├── parser.NewGoParser() → Register 10种语言解析器
-│   │   ├── parser.NewTreeSitterGoParser() → Register  (TS 加速)
-│   │   ├── parser.NewGenericParser()   加载配置中的额外语言
+│   │   ├── parser.DefaultParsers()     批量注册14种Tree-sitter解析器
+│   │   ├── parser.NewGenericParser()   加载配置中的额外语言（回退）
 │   │   └── fscanner.New()              构造 Scanner
 │   ├── printBanner()                   打印启动横幅
 │   ├── scan.Scan()                     ★ 核心扫描
@@ -656,19 +646,22 @@ Analyzer.BuildCallGraph(sessionID)
 
 ## 七、支持的语言与对应解析器
 
-| 语言 | 解析器 | 扩展名 | 策略 | 加速方式 |
-|------|--------|--------|------|---------|
-| Go | `GoParser` (专用) + `TreeSitterGoParser` | `.go` | 花括号匹配 + AST 分析 | ✅ Tree-sitter C API |
-| Python | `PythonParser` (专用) | `.py` | 缩进匹配 | — |
-| Java | `JavaParser` (专用) | `.java` | 花括号匹配 | — |
-| Kotlin | `KotlinParser` (专用) | `.kt`, `.kts` | 花括号匹配 | — |
-| JavaScript | `JavascriptParser` (专用) | `.js`, `.jsx`, `.mjs` | 花括号匹配 | — |
-| TypeScript | `TypescriptParser` (专用) | `.ts`, `.tsx` | 花括号匹配 | — |
-| C# | `CSharpParser` (专用) | `.cs` | 花括号匹配 | — |
-| C/C++ | `CPPParser` (专用) | `.cpp`, `.c`, `.h`, `.hpp` 等 | 花括号匹配 | — |
-| Rust | `RustParser` (专用) | `.rs` | 花括号匹配 | — |
-| Ruby | `RubyParser` (专用) | `.rb` | `end` 关键字匹配 | — |
-| 其他 | `GenericParser` (通用) | 由 `config.yaml` 定义 | 数据驱动正则 | — |
+| 语言 | 解析器实现 | 扩展名 | 策略 | 加速方式 |
+|------|-----------|--------|------|---------|
+| Go | `TreeSitterGoParser` (专用) + `GoParser` (回退) | `.go` | AST 分析 + 花括号匹配回退 | ✅ Tree-sitter C API |
+| Python | `TreeSitterParser` | `.py` | AST 分析 | ✅ Tree-sitter C API |
+| Java | `TreeSitterParser` | `.java` | AST 分析 | ✅ Tree-sitter C API |
+| Kotlin | `TreeSitterParser` | `.kt`, `.kts` | AST 分析 | ✅ Tree-sitter C API |
+| JavaScript | `TreeSitterParser` | `.js`, `.jsx`, `.mjs` | AST 分析 | ✅ Tree-sitter C API |
+| TypeScript | `TreeSitterParser` | `.ts`, `.tsx` | AST 分析 | ✅ Tree-sitter C API |
+| C# | `TreeSitterParser` | `.cs` | AST 分析 | ✅ Tree-sitter C API |
+| C/C++ | `TreeSitterParser` | `.cpp`, `.cxx`, `.cc`, `.c`, `.h`, `.hpp` | AST 分析 | ✅ Tree-sitter C API |
+| Rust | `TreeSitterParser` | `.rs` | AST 分析 | ✅ Tree-sitter C API |
+| Ruby | `TreeSitterParser` | `.rb` | AST 分析 | ✅ Tree-sitter C API |
+| Swift | `TreeSitterParser` | `.swift` | AST 分析 | ✅ Tree-sitter C API |
+| PHP | `TreeSitterParser` | `.php` | AST 分析 | ✅ Tree-sitter C API |
+| Lua | `TreeSitterParser` | `.lua` | AST 分析 | ✅ Tree-sitter C API |
+| Scala | `TreeSitterParser` | `.scala` | AST 分析 | ✅ Tree-sitter C API |
 
 ---
 
@@ -722,7 +715,7 @@ Analyzer.BuildCallGraph(sessionID)
 
 ## 八、关键设计决策
 
-1. **解析器接口化** — 每种语言实现 `Parser` 接口，注册到 `Registry`，便于扩展新语言
+1. **解析器体系：Tree-sitter 为主，正则回退为辅** — 全部 14 种语言优先使用 Tree-sitter C API 进行 AST 解析，Go 拥有专用 `TreeSitterGoParser` 增强圈复杂度/嵌套深度等精确度量；旧的正则解析器保留作为回退方案
 2. **数据驱动后备** — 对于没有专用解析器的语言，可用 `config.yaml` 配置正则表达式，`GenericParser` 兜底
 3. **编码自适应** — 自动检测 UTF-8/UTF-16 BOM、无 BOM UTF-16 启发式检测、GBK 等非 UTF-8 回退
 4. **并发模型** — 生产者-消费者模式：主 goroutine 收集文件后通过 channel 分发，N 个 worker 并发解析
