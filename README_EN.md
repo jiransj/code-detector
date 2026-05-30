@@ -8,7 +8,7 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
-  <img src="https://img.shields.io/badge/version-v1.0-brightgreen.svg" alt="Version v1.0">
+  <img src="https://img.shields.io/badge/version-v1.1-brightgreen.svg" alt="Version v1.1">
   <img src="https://img.shields.io/badge/go-1.26-blue.svg" alt="Go 1.26">
   <img src="https://img.shields.io/badge/platform-windows%20%7C%20linux-lightgrey.svg" alt="Platform">
 </p>
@@ -24,7 +24,7 @@
 - **Advantage**: Review project robustness from a function-level perspective — evaluate function quality and detect duplicate/reinvented functionality
 - Eliminate irrelevant context interference, providing excellent support for code agents
 
-Current version: **v1.0**
+Current version: **v1.1**
 
 ---
 
@@ -337,7 +337,7 @@ code-detector -query tree=printBanner -format json
 
 ## MCP Protocol Support
 
-Starting from v1.0, **code-detector** supports [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server mode, allowing AI clients (such as Claude Desktop) to interact directly with code-detector for real-time project function data queries.
+Starting from v0.8, **code-detector** supports [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server mode, allowing AI clients (such as Claude Desktop) to interact directly with code-detector for real-time project function data queries.
 
 ### How to Start
 
