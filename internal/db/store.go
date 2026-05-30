@@ -19,11 +19,29 @@ type Store struct {
 	funcMu      sync.Mutex // 保护函数批量写入
 	depsMu      sync.Mutex // 保护依赖关系批量写入
 	globalVarMu sync.Mutex // 保护全局变量批量写入
+
+	// 缓存预处理语句，避免每次批次重新 prepare
+	funcInsertStmt      *sql.Stmt
+	depsInsertStmt      *sql.Stmt
+	globalVarInsertStmt *sql.Stmt
 }
 
 // NewStore 创建 Store 实例
 func NewStore(db *sql.DB) *Store {
-	return &Store{DB: db}
+	s := &Store{DB: db}
+	// 预处理 INSERT 语句，避免每次批次重新编译
+	s.funcInsertStmt, _ = db.Prepare(
+		`INSERT INTO functions (session_id, name, package_name, language, file_path, line_start, line_end, body, hash, call_count, nesting_depth,
+		                        parameters, return_types, receiver, is_method, visibility, cyclomatic, parameter_count, return_count, statement_count, anonymous_funcs)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+		         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	)
+	s.depsInsertStmt, _ = db.Prepare(`INSERT OR IGNORE INTO function_deps (caller_id, callee_name) VALUES (?, ?)`)
+	s.globalVarInsertStmt, _ = db.Prepare(
+		`INSERT INTO global_vars (session_id, name, var_type, language, package_name, visibility, file_path, line_num, is_const, hash)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	)
+	return s
 }
 
 // CreateSession 创建一次扫描会话，返回 session_id
@@ -264,17 +282,7 @@ func (s *Store) BatchInsertFunctions(functions []*model.Function, sessionID int6
 	}
 	defer tx.Rollback()
 
-	stmt, err := tx.Prepare(
-		`INSERT INTO functions (session_id, name, package_name, language, file_path, line_start, line_end, body, hash, call_count, nesting_depth,
-		                        parameters, return_types, receiver, is_method, visibility, cyclomatic, parameter_count, return_count, statement_count, anonymous_funcs)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-		         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-	)
-	if err != nil {
-		return nil, 0, 0, fmt.Errorf("prepare stmt: %w", err)
-	}
-	defer stmt.Close()
-
+	stmt := tx.Stmt(s.funcInsertStmt)
 	ids := make([]int64, 0, len(functions))
 	skipped := 0
 	changed := 0
@@ -338,12 +346,7 @@ func (s *Store) BatchInsertDeps(deps map[int64][]string) error {
 	}
 	defer tx.Rollback()
 
-	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO function_deps (caller_id, callee_name) VALUES (?, ?)`)
-	if err != nil {
-		return fmt.Errorf("prepare stmt: %w", err)
-	}
-	defer stmt.Close()
-
+	stmt := tx.Stmt(s.depsInsertStmt)
 	for callerID, callees := range deps {
 		for _, callee := range callees {
 			if _, err := stmt.Exec(callerID, callee); err != nil {
@@ -513,15 +516,7 @@ func (s *Store) BatchInsertGlobalVars(vars []*model.GlobalVariable, sessionID in
 	}
 	defer tx.Rollback()
 
-	stmt, err := tx.Prepare(
-		`INSERT INTO global_vars (session_id, name, var_type, language, package_name, visibility, file_path, line_num, is_const, hash)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-	)
-	if err != nil {
-		return 0, 0, fmt.Errorf("prepare stmt: %w", err)
-	}
-	defer stmt.Close()
-
+	stmt := tx.Stmt(s.globalVarInsertStmt)
 	skipped := 0
 	changed := 0
 
@@ -702,6 +697,15 @@ func (s *Store) ComputeFileMetrics(sessionID int64) error {
 
 // Close 关闭数据库连接
 func (s *Store) Close() error {
+	if s.funcInsertStmt != nil {
+		s.funcInsertStmt.Close()
+	}
+	if s.depsInsertStmt != nil {
+		s.depsInsertStmt.Close()
+	}
+	if s.globalVarInsertStmt != nil {
+		s.globalVarInsertStmt.Close()
+	}
 	s.Checkpoint()
 	return s.DB.Close()
 }
