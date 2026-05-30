@@ -2,7 +2,7 @@ package db
 
 import (
 	"context"
-	"crypto/sha256"
+	"hash/fnv"
 	"database/sql"
 	"fmt"
 	"sort"
@@ -146,20 +146,41 @@ func (s *Store) InsertDependency(callerID int64, calleeName string) error {
 // FuncHash 计算函数的唯一哈希值
 func FuncHash(f *model.Function) string {
 	sort.Strings(f.Dependencies)
-	data := fmt.Sprintf("%s|%s|%s|%s|%d|%s|%v|%d|%d|%s|%s|%s|%v|%s|%d|%d|%d|%d|%d",
-		f.Name, f.PackageName, f.Language, f.FilePath, f.LineStart, f.Body, f.Dependencies,
-		f.CallCount, f.NestingDepth,
-		f.Parameters, f.ReturnTypes, f.Receiver, f.IsMethod, f.Visibility,
-		f.Cyclomatic, f.ParameterCount, f.ReturnCount, f.StatementCount, f.AnonymousFuncs)
-	h := sha256.Sum256([]byte(data))
-	return fmt.Sprintf("%x", h[:16])
+	h := fnv.New128a()
+	h.Write([]byte(f.Name))
+	h.Write([]byte(f.PackageName))
+	h.Write([]byte(f.Language))
+	h.Write([]byte(f.FilePath))
+	h.Write([]byte(fmt.Sprintf("%d", f.LineStart)))
+	h.Write([]byte(f.Body))
+	h.Write([]byte(fmt.Sprintf("%v", f.Dependencies)))
+	h.Write([]byte(fmt.Sprintf("%d", f.CallCount)))
+	h.Write([]byte(fmt.Sprintf("%d", f.NestingDepth)))
+	h.Write([]byte(f.Parameters))
+	h.Write([]byte(f.ReturnTypes))
+	h.Write([]byte(f.Receiver))
+	h.Write([]byte(fmt.Sprintf("%v", f.IsMethod)))
+	h.Write([]byte(f.Visibility))
+	h.Write([]byte(fmt.Sprintf("%d", f.Cyclomatic)))
+	h.Write([]byte(fmt.Sprintf("%d", f.ParameterCount)))
+	h.Write([]byte(fmt.Sprintf("%d", f.ReturnCount)))
+	h.Write([]byte(fmt.Sprintf("%d", f.StatementCount)))
+	h.Write([]byte(fmt.Sprintf("%d", f.AnonymousFuncs)))
+	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
 // VarHash 计算全局变量的唯一哈希值
 func VarHash(v *model.GlobalVariable) string {
-	data := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%d|%v", v.Name, v.VarType, v.Language, v.PackageName, v.Visibility, v.FilePath, v.LineNum, v.IsConst)
-	h := sha256.Sum256([]byte(data))
-	return fmt.Sprintf("%x", h[:16])
+	h := fnv.New128a()
+	h.Write([]byte(v.Name))
+	h.Write([]byte(v.VarType))
+	h.Write([]byte(v.Language))
+	h.Write([]byte(v.PackageName))
+	h.Write([]byte(v.Visibility))
+	h.Write([]byte(v.FilePath))
+	h.Write([]byte(fmt.Sprintf("%d", v.LineNum)))
+	h.Write([]byte(fmt.Sprintf("%v", v.IsConst)))
+	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
 // buildInClause 安全构建 IN 查询的前半部分（不含 WHERE 前缀）和参数列表
