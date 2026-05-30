@@ -20,7 +20,7 @@ import (
 	"code-detector/internal/parser"
 )
 
-const version = "0.8"
+const version = "0.9"
 
 // cleanup 退出前需执行的清理（关闭 DB 确保 WAL 回归），main 中初始化，fatal 中调用
 var cleanup func()
