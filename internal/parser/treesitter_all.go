@@ -9,6 +9,7 @@ import (
 	sitter "github.com/smacker/go-tree-sitter"
 	tscpp "github.com/smacker/go-tree-sitter/cpp"
 	tscsharp "github.com/smacker/go-tree-sitter/csharp"
+	tsembedded "code-detector/internal/parser/erb"
 	tsjava "github.com/smacker/go-tree-sitter/java"
 	tsjavascript "github.com/smacker/go-tree-sitter/javascript"
 	tskotlin "github.com/smacker/go-tree-sitter/kotlin"
@@ -104,7 +105,18 @@ var tsLangRegistry = []tsLangDef{
 		ConstQuery: `(source_file (const_item name: (identifier) @name type: (_)? @type value: (_)? @value) @decl)`,
 	},
 	{
-		Name: "ruby", Extensions: []string{".rb", ".erb"},
+		Name: "embedded_template", Extensions: []string{".erb"},
+		GetLang:    erbGetLang,
+		// embedded_template 的 AST: directive (代码块)/output_directive (输出)/content (文本)
+		// 捕获 directive 节点整体作为函数体，code 子节点作为 name 占位
+		FuncQuery:  `(directive) @func`,
+		CallQuery:  ``,
+		PkgQuery:   ``,
+		VarQuery:   ``,
+		ConstQuery: ``,
+	},
+	{
+		Name: "ruby", Extensions: []string{".rb"},
 		GetLang:    rubyGetLang,
 		FuncQuery:  `(method name: (identifier) @name body: (body_statement) @body) @func`,
 		CallQuery:  `(call method: (identifier) @callee) @call`,
@@ -193,6 +205,7 @@ func jsGetLang() *sitter.Language    { return tsjavascript.GetLanguage() }
 func cppGetLang() *sitter.Language   { return tscpp.GetLanguage() }
 func rustGetLang() *sitter.Language  { return tsrust.GetLanguage() }
 func rubyGetLang() *sitter.Language  { return tsruby.GetLanguage() }
+func erbGetLang() *sitter.Language  { return tsembedded.GetLanguage() }
 func csGetLang() *sitter.Language    { return tscsharp.GetLanguage() }
 func tsGetLang() *sitter.Language    { return tstypescript.GetLanguage() }
 func tsxGetLang() *sitter.Language   { return tstypescriptTsx.GetLanguage() }
