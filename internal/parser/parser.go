@@ -75,7 +75,7 @@ func DefaultParsers() []ParserRegistration {
 		{NewTreeSitterParser(".cs"), []string{".cs"}},
 		{NewTreeSitterParser(".cpp"), []string{".cpp", ".cxx", ".cc", ".c", ".h", ".hpp"}},
 		{NewTreeSitterParser(".rs"), []string{".rs"}},
-		{NewTreeSitterParser(".rb"), []string{".rb"}},
+		{NewTreeSitterParser(".rb"), []string{".rb", ".erb"}},
 		{NewTreeSitterParser(".ts"), []string{".ts", ".tsx"}},
 		{NewTreeSitterParser(".swift"), []string{".swift"}},
 		{NewTreeSitterParser(".kt"), []string{".kt", ".kts"}},

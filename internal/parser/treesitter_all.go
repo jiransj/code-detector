@@ -104,7 +104,7 @@ var tsLangRegistry = []tsLangDef{
 		ConstQuery: `(source_file (const_item name: (identifier) @name type: (_)? @type value: (_)? @value) @decl)`,
 	},
 	{
-		Name: "ruby", Extensions: []string{".rb"},
+		Name: "ruby", Extensions: []string{".rb", ".erb"},
 		GetLang:    rubyGetLang,
 		FuncQuery:  `(method name: (identifier) @name body: (body_statement) @body) @func`,
 		CallQuery:  `(call method: (identifier) @callee) @call`,
