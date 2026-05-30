@@ -55,24 +55,26 @@ jobs:
           VER="${TAG#code-detector-}"    # e.g. code-detector-v0.9 → v0.9
           echo "version=$VER" >> "$GITHUB_OUTPUT"
 
-      - name: Find and prepare changelog
+      - name: Prepare release notes
         id: changelog
         shell: bash
         run: |
           CHANGELOG_FILE="CHANGELOG.md"
           if [ -f "$CHANGELOG_FILE" ]; then
-            echo "found=true" >> "$GITHUB_OUTPUT"
-            echo "body<<EOF" >> "$GITHUB_OUTPUT"
-            cat "$CHANGELOG_FILE" >> "$GITHUB_OUTPUT"
-            echo "EOF" >> "$GITHUB_OUTPUT"
+            {
+              echo 'body<<EOF'
+              cat "$CHANGELOG_FILE"
+              echo 'EOF'
+            } >> "$GITHUB_OUTPUT"
+            echo "has_body=true" >> "$GITHUB_OUTPUT"
           else
-            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "has_body=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Publish Release with Changelog
+      - name: Publish Release
         uses: softprops/action-gh-release@v2
-        if: steps.changelog.outputs.found == 'true'
         with:
           tag_name: ${{ github.ref_name }}
           name: code-detector ${{ steps.version.outputs.version }}
           body: ${{ steps.changelog.outputs.body }}
+          generate_release_notes: ${{ steps.changelog.outputs.has_body == 'false' }}
