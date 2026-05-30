@@ -11,6 +11,10 @@ import (
 // stripStringContent 用空格替换字符串字面量和注释内容，使调用正则不会误匹配字符串/注释中的文本
 // 保留非字符串部分的位置对齐，确保行号/列号相关的调试信息不受影响
 func stripStringContent(line string) string {
+	// 快速路径：不含任何特殊字符的行直接返回
+	if !strings.ContainsAny(line, "\"'`/\\") {
+		return line
+	}
 	inDouble := false
 	inSingle := false
 	inBacktick := false
@@ -97,6 +101,10 @@ type stripperState struct {
 // stripLine 脱敏单行：用空格替换字符串和注释内容，保留非字符串部分对齐
 // 通过 state 追踪跨行块注释 /* */ 状态
 func stripLine(line string, state *stripperState) string {
+	// 快速路径：不在块注释中且不含任何特殊字符的行直接返回
+	if !state.InBlockComment && !strings.ContainsAny(line, "\"'`/\\") {
+		return line
+	}
 	inDouble := false
 	inSingle := false
 	inBacktick := false
