@@ -279,17 +279,17 @@ func TestExtractCallStatsSimpleSkipFn(t *testing.T) {
 }
 
 // ──────────────────────────────
-// goVisibility 测试
+// visibilityFromName 测试
 // ──────────────────────────────
 
 func TestGoVisibility(t *testing.T) {
-	if v := goVisibility("Foo"); v != "public" {
-		t.Errorf("goVisibility(Foo) = %s, want public", v)
+	if v := visibilityFromName("Foo"); v != "public" {
+		t.Errorf("visibilityFromName(Foo) = %s, want public", v)
 	}
-	if v := goVisibility("foo"); v != "private" {
-		t.Errorf("goVisibility(foo) = %s, want private", v)
+	if v := visibilityFromName("foo"); v != "private" {
+		t.Errorf("visibilityFromName(foo) = %s, want private", v)
 	}
-	if v := goVisibility(""); v != "private" {
-		t.Errorf("goVisibility('') = %s, want private", v)
+	if v := visibilityFromName(""); v != "private" {
+		t.Errorf("visibilityFromName('') = %s, want private", v)
 	}
 }
