@@ -330,9 +330,12 @@ code-detector/
 │   │
 │   └── db/
 │       ├── schema.go         ← 数据库表结构定义 + 迁移
-│       ├── store.go          ← CRUD 操作
+│       ├── store.go          ← CRUD 操作 + 哈希去重引擎
 │       │   ├── CreateSession()          ← 创建扫描会话
 │       │   ├── BatchInsertFunctions()   ← 批量写入函数（含去重）
+│       │   │   ├── FuncHash(f)          ← FNV-128a 对18个字段计算哈希
+│       │   │   ├── CheckExistingFuncHashes() ← 查已有 hash（file:name:line 两级定位）
+│       │   │   └── 增量模式：hash 相同→跳过，hash 不同→DELETE+INSERT
 │       │   ├── BatchInsertGlobalVars()  ← 批量写入全局变量
 │       │   ├── BatchInsertDeps()        ← 批量写入依赖关系
 │       │   ├── QueryDependencies()      ← 查询函数依赖
@@ -551,9 +554,61 @@ Analyzer.BuildCallGraph(sessionID)
     └── FindOrphanFunctions()   ← 未被调用的函数
 ```
 
----
+### 4.8 哈希去重引擎 (internal/db/store.go)
 
-## 五、数据流图
+```
+FuncHash(f)                        ★ FNV-128a 对函数 18 个字段计算哈希
+│
+├── 字段输入（按写入顺序）:
+│   ├─ Name / PackageName / Language / FilePath / LineStart
+│   ├─ Body                         ← 函数体（敏感字段，变化即改哈希）
+│   ├─ Dependencies (预先 sort.Strings 保证稳定)
+│   ├─ CallCount / NestingDepth
+│   ├─ Parameters / ReturnTypes / Receiver
+│   ├─ IsMethod / Visibility
+│   └─ Cyclomatic / ParameterCount / ReturnCount
+│       StatementCount / AnonymousFuncs
+│
+└── 输出: 32 字符 hex 字符串（如 "3f7a2b1c..."）
+
+
+BatchInsertFunctions(funcs, sessionID, skipHashCheck)
+│
+├── [skipHashCheck=true] 全量扫描模式
+│   └── 逐行计算 FuncHash → INSERT，无查询比对
+│
+└── [skipHashCheck=false] 增量扫描模式
+    │
+    ├── 1. CheckExistingFuncHashes()
+    │   ├── 收集所有 file_path（去重）
+    │   ├── SQL: WHERE session_id=? AND file_path IN (...)
+    │   └── 构建两个索引:
+    │       ├── existing["file:name:line"] → id
+    │       └── hashMap["hash"]           → id
+    │
+    └── 2. 遍历新函数列表:
+        │
+        ├── hash = FuncHash(f)
+        ├── key = "file:name:line"
+        │
+        ├── key 不存在 → INSERT（新函数）
+        │
+        ├── key 存在 && hash 相同 → skip（未变更）
+        │
+        └── key 存在 && hash 不同 → 内容已变更
+            ├── DELETE function_deps WHERE caller_id=oldID
+            ├── DELETE functions WHERE id=oldID
+            └── INSERT 新函数行
+
+
+VarHash(v)                         ★ 全局变量哈希（FNV-128a, 8个字段）
+│
+├── Name / VarType / Language / PackageName
+├── Visibility / FilePath / LineNum / IsConst
+└── 输出: 32 字符 hex
+```
+
+---
 
 ```
 ┌──────────┐    CLI参数     ┌───────────┐
@@ -720,7 +775,7 @@ Analyzer.BuildCallGraph(sessionID)
 3. **编码自适应** — 自动检测 UTF-8/UTF-16 BOM、无 BOM UTF-16 启发式检测、GBK 等非 UTF-8 回退
 4. **并发模型** — 生产者-消费者模式：主 goroutine 收集文件后通过 channel 分发，N 个 worker 并发解析
 5. **增量扫描** — 通过文件 mtime 缓存跳过未变更文件，适合大型项目的重复扫描
-6. **去重机制** — 函数内容 SHA256 哈希去重 + 硬链接 `os.SameFile()` 去重
+6. **哈希去重机制** — 使用 `hash/fnv.New128a()`（FNV-1a 128位非加密哈希）对函数 18 个字段和全局变量 8 个字段分别计算哈希值；增量扫描时通过 `(file:name:line)` 两级定位后比较哈希值，相同则跳过写入、不同则删除旧行并插入新行；全量扫描时跳过哈希比对直接写入
 7. **会话管理** — 自动清理旧会话（保留最近3个），防止数据库无限膨胀
 8. **WAL 模式** — SQLite WAL 模式提升并发写入性能，扫描完成时主动 checkpoint
 9. **查询模式 (-query)** — 复用已有的分析器 (`internal/analyzer`) 和数据库查询层 (`internal/db/querier.go`)，无需重新扫描即可获取死代码、热点函数、调用链等分析结果
