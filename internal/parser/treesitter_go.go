@@ -86,8 +86,8 @@ const (
 	qCall       = `(call_expression function: (identifier) @callee) @call`
 	qSelCall    = `(call_expression function: (selector_expression (field_identifier) @callee)) @call`
 	qPkg        = `(source_file (package_clause (package_identifier) @pkg))`
-	qVar        = `(var_declaration (var_spec name: (identifier) @name type: (_)? @type)) @decl`
-	qConst      = `(const_declaration (const_spec name: (identifier) @name type: (_)? @type)) @decl`
+	qVar        = `(var_declaration (var_spec name: (identifier) @name type: (_)? @type value: (_)? @value)) @decl`
+	qConst      = `(const_declaration (const_spec name: (identifier) @name type: (_)? @type value: (_)? @value)) @decl`
 )
 
 func (p *TreeSitterGoParser) Parse(filePath string, content []byte) ([]*model.Function, error) {
@@ -123,14 +123,20 @@ func (p *TreeSitterGoParser) Globals(filePath string, content []byte) ([]*model.
 	var results []*model.GlobalVariable
 
 	// 只提取顶层 var/const（parent == source_file），排除函数体内的局部变量
-	tsEachTopLevel(root, qVar, content, func(name, typeStr string, lineNum int) {
+	tsEachTopLevel(root, qVar, content, func(name, typeStr string, lineNum int, valueNode *sitter.Node) {
+		if typeStr == "" {
+			typeStr = inferTypeFromValue(valueNode, content)
+		}
 		results = append(results, &model.GlobalVariable{
 			Name: name, VarType: typeStr, Language: "go",
 			PackageName: pkgName, Visibility: visibilityFromName(name),
 			FilePath: filepath.ToSlash(filePath), LineNum: lineNum, IsConst: false,
 		})
 	})
-	tsEachTopLevel(root, qConst, content, func(name, typeStr string, lineNum int) {
+	tsEachTopLevel(root, qConst, content, func(name, typeStr string, lineNum int, valueNode *sitter.Node) {
+		if typeStr == "" {
+			typeStr = inferTypeFromValue(valueNode, content)
+		}
 		results = append(results, &model.GlobalVariable{
 			Name: name, VarType: typeStr, Language: "go",
 			PackageName: pkgName, Visibility: visibilityFromName(name),
@@ -154,8 +160,8 @@ func visibilityFromName(name string) string {
 
 // tsEachTopLevel 只匹配 source_file 直接子级的 var/const 声明（排除局部变量）
 // 注意：一个 match 中可能包含多个 name/type 对（如 var (a int; b string)），
-// 因此需要收集所有 (name, type, line) 三元组并逐个回调。
-func tsEachTopLevel(root *sitter.Node, queryStr string, content []byte, fn func(name, typeStr string, lineNum int)) {
+// 因此需要收集所有 (name, type, line, value) 四元组并逐个回调。
+func tsEachTopLevel(root *sitter.Node, queryStr string, content []byte, fn func(name, typeStr string, lineNum int, valueNode *sitter.Node)) {
 	q := getCachedQuery(queryStr)
 	if q == nil {
 		return
@@ -175,13 +181,14 @@ func tsEachTopLevel(root *sitter.Node, queryStr string, content []byte, fn func(
 		}
 
 		var isTopLevel bool
-		// 一个 match 中可能有多个 name/type/line 组合（grouped var/const）
-		type triplet struct {
-			name    string
-			typeStr string
-			lineNum int
+		// 一个 match 中可能有多个 name/type/value/line 组合（grouped var/const）
+		type quad struct {
+			name      string
+			typeStr   string
+			lineNum   int
+			valueNode *sitter.Node
 		}
-		var pairs []triplet
+		var pairs []quad
 		for _, c := range m.Captures {
 			if c.Node == nil {
 				continue
@@ -191,7 +198,7 @@ func tsEachTopLevel(root *sitter.Node, queryStr string, content []byte, fn func(
 				parent := c.Node.Parent()
 				isTopLevel = parent != nil && parent.Type() == "source_file"
 			case "name":
-				pairs = append(pairs, triplet{
+				pairs = append(pairs, quad{
 					name:    strings.TrimSpace(c.Node.Content(content)),
 					lineNum: int(c.Node.StartPoint().Row) + 1,
 				})
@@ -199,15 +206,90 @@ func tsEachTopLevel(root *sitter.Node, queryStr string, content []byte, fn func(
 				if len(pairs) > 0 {
 					pairs[len(pairs)-1].typeStr = strings.TrimSpace(c.Node.Content(content))
 				}
+			case "value":
+				if len(pairs) > 0 {
+					pairs[len(pairs)-1].valueNode = c.Node
+				}
 			}
 		}
 		if isTopLevel {
 			for _, p := range pairs {
 				if p.name != "" {
-					fn(p.name, p.typeStr, p.lineNum)
+					fn(p.name, p.typeStr, p.lineNum, p.valueNode)
 				}
 			}
 		}
+	}
+}
+
+// inferTypeFromValue 当变量没有显式类型标注时，从 value 节点推断类型
+// value 是 tree-sitter AST 中的值表达式节点（var_spec / const_spec 的 value 子节点）
+func inferTypeFromValue(valueNode *sitter.Node, content []byte) string {
+	if valueNode == nil {
+		return ""
+	}
+	switch valueNode.Type() {
+	case "interpreted_string_literal", "raw_string_literal":
+		return "string"
+	case "int_literal":
+		return "int"
+	case "float_literal":
+		return "float64"
+	case "imaginary_literal":
+		return "complex128"
+	case "boolean_literal", "true", "false":
+		return "bool"
+	case "nil":
+		return "untyped nil"
+	case "composite_literal":
+		// composite_literal 的第一个命名子节点是类型名
+		for i := 0; i < int(valueNode.ChildCount()); i++ {
+			child := valueNode.Child(i)
+			childType := child.Type()
+			// 跳过匿名字段、{ } 括号
+			if childType == "literal_value" || childType == "{" || childType == "}" {
+				continue
+			}
+			return child.Content(content)
+		}
+		return ""
+	case "call_expression":
+		// call_expression 的 function 子节点给出函数名
+		// 如 context.Background() → 返回 "context.Background"
+		for i := 0; i < int(valueNode.ChildCount()); i++ {
+			child := valueNode.Child(i)
+			if child.Type() == "identifier" || child.Type() == "selector_expression" {
+				return child.Content(content)
+			}
+		}
+		return ""
+	case "type_conversion_expression":
+		// type_conversion_expression 的 type 子节点
+		for i := 0; i < int(valueNode.ChildCount()); i++ {
+			child := valueNode.Child(i)
+			if child.Type() != "(" && child.Type() != ")" && child.Type() != "argument_list" {
+				return child.Content(content)
+			}
+		}
+		return ""
+	case "unary_expression":
+		// 如 -1 或 !true
+		if valueNode.ChildCount() >= 2 {
+			operand := valueNode.Child(int(valueNode.ChildCount()) - 1)
+			return inferTypeFromValue(operand, content)
+		}
+		return ""
+	case "binary_expression":
+		return "bool"
+	case "function_literal":
+		return "func"
+	case "slice_literal":
+		return "[]"
+	case "keyed_element":
+		// map/slice 中的元素，回退
+		return ""
+	default:
+		return ""
 	}
 }
 
