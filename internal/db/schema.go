@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -32,7 +33,7 @@ const (
 		line_end        INTEGER DEFAULT 0,
 		body            TEXT    DEFAULT '',
 		hash            TEXT    DEFAULT '',
-		FOREIGN KEY (session_id) REFERENCES scan_sessions(id)
+		FOREIGN KEY (session_id) REFERENCES scan_sessions(id) ON DELETE CASCADE
 	);`
 
 	createFunctionDepsTable = `
@@ -41,7 +42,7 @@ const (
 		caller_id   INTEGER NOT NULL,
 		callee_name TEXT    NOT NULL,
 		UNIQUE(caller_id, callee_name),
-		FOREIGN KEY (caller_id) REFERENCES functions(id)
+		FOREIGN KEY (caller_id) REFERENCES functions(id) ON DELETE CASCADE
 	);`
 
 	createGlobalVarsTable = `
@@ -55,7 +56,7 @@ const (
 		line_num   INTEGER DEFAULT 0,
 		is_const   INTEGER DEFAULT 0,
 		hash       TEXT    DEFAULT '',
-		FOREIGN KEY (session_id) REFERENCES scan_sessions(id)
+		FOREIGN KEY (session_id) REFERENCES scan_sessions(id) ON DELETE CASCADE
 	);`
 
 	createFileMetricsTable = `
@@ -80,7 +81,7 @@ const (
 		public_funcs    INTEGER DEFAULT 0,
 		private_funcs   INTEGER DEFAULT 0,
 		methods_count   INTEGER DEFAULT 0,
-		FOREIGN KEY (session_id) REFERENCES scan_sessions(id)
+		FOREIGN KEY (session_id) REFERENCES scan_sessions(id) ON DELETE CASCADE
 	);`
 
 	createTypeDefsTable = `
@@ -96,7 +97,7 @@ const (
 		line_end    INTEGER DEFAULT 0,
 		body        TEXT    DEFAULT '',
 		fields      TEXT    DEFAULT '',
-		FOREIGN KEY (session_id) REFERENCES scan_sessions(id)
+		FOREIGN KEY (session_id) REFERENCES scan_sessions(id) ON DELETE CASCADE
 	);`
 
 	// 索引
@@ -123,7 +124,7 @@ const (
 		mtime       INTEGER NOT NULL,
 		hash        TEXT    DEFAULT '',
 		session_id  INTEGER NOT NULL,
-		FOREIGN KEY (session_id) REFERENCES scan_sessions(id)
+		FOREIGN KEY (session_id) REFERENCES scan_sessions(id) ON DELETE CASCADE
 	);`
 )
 
@@ -150,6 +151,75 @@ func columnExists(db *sql.DB, tableName, columnName string) (bool, error) {
 	return false, rows.Err()
 }
 
+// migrateCascadeFK 将已有表的外键升级为 ON DELETE CASCADE（SQLite 不支持 ALTER TABLE 改外键）
+func migrateCascadeFK(db *sql.DB) error {
+	// 检查 functions 表的 session_id 外键是否已有 CASCADE
+	hasCascade := false
+	rows, err := db.Query("PRAGMA foreign_key_list(functions)")
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var id, seq int
+		var table, from, to, onUpdate, onDelete, match string
+		if err := rows.Scan(&id, &seq, &table, &from, &to, &onUpdate, &onDelete, &match); err != nil {
+			continue
+		}
+		if from == "session_id" && onDelete == "CASCADE" {
+			hasCascade = true
+		}
+	}
+	rows.Close()
+	if hasCascade {
+		return nil // 已迁移
+	}
+
+	// 需要迁移的表对：(旧表, 新表DDL)
+	type tableDef struct {
+		name string
+		ddl  string
+	}
+	tables := []tableDef{
+		{"function_deps", createFunctionDepsTable},
+		{"functions", createFunctionsTable},
+		{"file_metrics", createFileMetricsTable},
+		{"type_defs", createTypeDefsTable},
+		{"global_vars", createGlobalVarsTable},
+		{"file_cache", createFileCacheTable},
+	}
+
+	// 禁用外键，避免重建时的引用检查
+	db.Exec("PRAGMA foreign_keys=OFF")
+
+	for _, t := range tables {
+		tmpName := t.name + "_cascade"
+		// 创建新表（DDL 中定义了 CASCADE）
+		ddl := "CREATE TABLE IF NOT EXISTS " + tmpName + " " + t.ddl[strings.Index(t.ddl, "("):]
+		if _, err := db.Exec(ddl); err != nil {
+			db.Exec("PRAGMA foreign_keys=ON")
+			return fmt.Errorf("create %s: %w", tmpName, err)
+		}
+		// 复制数据
+		if _, err := db.Exec("INSERT INTO " + tmpName + " SELECT * FROM " + t.name); err != nil {
+			db.Exec("PRAGMA foreign_keys=ON")
+			return fmt.Errorf("copy %s: %w", t.name, err)
+		}
+		// 删除原表
+		if _, err := db.Exec("DROP TABLE " + t.name); err != nil {
+			db.Exec("PRAGMA foreign_keys=ON")
+			return fmt.Errorf("drop %s: %w", t.name, err)
+		}
+		// 重命名新表
+		if _, err := db.Exec("ALTER TABLE " + tmpName + " RENAME TO " + t.name); err != nil {
+			db.Exec("PRAGMA foreign_keys=ON")
+			return fmt.Errorf("rename %s: %w", t.name, err)
+		}
+	}
+
+	db.Exec("PRAGMA foreign_keys=ON")
+	return nil
+}
+
 // InitDB 初始化数据库，创建所有表与索引，执行迁移
 func InitDB(dbPath string) (*sql.DB, error) {
 	db, err := sql.Open("sqlite", dbPath)
@@ -162,6 +232,9 @@ func InitDB(dbPath string) (*sql.DB, error) {
 	}
 	if _, err := db.Exec("PRAGMA foreign_keys=ON"); err != nil {
 		log.Printf("warn: failed to enable foreign keys: %v", err)
+	}
+	if _, err := db.Exec("PRAGMA busy_timeout=5000"); err != nil {
+		log.Printf("warn: failed to set busy timeout: %v", err)
 	}
 
 	// 创建基础表
@@ -230,6 +303,11 @@ func InitDB(dbPath string) (*sql.DB, error) {
 		if _, err := db.Exec(m.stmt); err != nil {
 			log.Printf("warn: migration %s.%s: %v", m.table, m.column, err)
 		}
+	}
+
+	// 外键 CASCADE 迁移：确保旧库的级联删除支持
+	if err := migrateCascadeFK(db); err != nil {
+		log.Printf("warn: cascade FK migration: %v", err)
 	}
 
 	return db, nil
