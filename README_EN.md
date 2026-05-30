@@ -347,7 +347,7 @@ code-detector -mcp [-db <database_path>]
 
 Communicates via stdio using JSON-RPC messages, compatible with all standard MCP clients.
 
-### 16 MCP Tools
+### 17 MCP Tools
 
 | Tool Name | Description | Equivalent CLI Query |
 |-----------|-------------|---------------------|
@@ -367,6 +367,7 @@ Communicates via stdio using JSON-RPC messages, compatible with all standard MCP
 | `find_anonymous` | Functions containing anonymous functions/closures | `anon` |
 | `file_metrics` | File-level statistics | `files` |
 | `list_types` | List type definitions | `types` |
+| `get_func_tree` | 🆕 Recursively extract a function and all its transitive dependencies (with function bodies) | `tree=NAME` |
 
 ### 6 MCP Resources
 
@@ -394,7 +395,7 @@ Add the following to your Claude Desktop `claude_desktop_config.json`:
 }
 ```
 
-> Once configured, Claude Desktop can directly call all 16 tools and 6 resources to query project code analysis results.
+> Once configured, Claude Desktop can directly call all 17 tools and 6 resources to query project code analysis results.
 
 ---
 
