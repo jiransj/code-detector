@@ -143,11 +143,17 @@ func (s *Scanner) Scan(root string) (*model.ScanResult, error) {
 		return nil, err
 	}
 	if len(files) == 0 {
-		if err := s.Store.UpdateSession(sessionID, time.Since(start), 0, 0, 0); err != nil && s.Verbose {
+		// 全量跳过时仍从 DB 查询真实函数/变量数
+		var funcCnt, varCnt int
+		s.Store.DB.QueryRow("SELECT COUNT(*) FROM (SELECT DISTINCT file_path, name, line_start FROM functions)").Scan(&funcCnt)
+		s.Store.DB.QueryRow("SELECT COUNT(*) FROM (SELECT DISTINCT file_path, name, line_num FROM global_vars)").Scan(&varCnt)
+		if err := s.Store.UpdateSession(sessionID, time.Since(start), 0, funcCnt, varCnt); err != nil && s.Verbose {
 			fmt.Fprintf(os.Stderr, "warn: UpdateSession: %v\n", err)
 		}
 		result.Duration = time.Since(start)
 		result.FileCount = 0
+		result.Session.FuncCount = funcCnt
+		result.Session.VarCount = varCnt
 		return result, nil
 	}
 	result.FileCount = fileCount
@@ -234,6 +240,7 @@ func (s *Scanner) collectFiles(absRoot string, tempPrefix string, result *model.
 				if s.Verbose {
 					fmt.Fprintf(os.Stderr, "skip (cached): %s\n", path)
 				}
+				result.SkipCount++
 				return nil
 			}
 		}
@@ -250,6 +257,8 @@ func (s *Scanner) collectFiles(absRoot string, tempPrefix string, result *model.
 // parseResult 单个文件的解析结果
 type parseResult struct {
 	path      string
+	hash      string // 内容 FNV 哈希，用于 AST 缓存
+	fromCache bool   // 是否来自 AST 缓存命中（无需重写缓存）
 	functions []*model.Function
 	globals   []*model.GlobalVariable
 	err       error
@@ -285,13 +294,8 @@ func (s *Scanner) parseConcurrently(files []string, absRoot string, sessionID in
 				}
 			}()
 			for job := range jobs {
-				funcs, globals, err := s.parseFile(job.path)
-				if err == nil && s.Incremental {
-					if fi, statErr := os.Stat(job.path); statErr == nil {
-						_ = s.Store.UpsertFileCache(job.path, fi.ModTime().Unix(), "", sessionID)
-					}
-				}
-				results <- parseResult{path: job.path, functions: funcs, globals: globals, err: err}
+				funcs, globals, hash, fromCache, err := s.parseFile(job.path)
+				results <- parseResult{path: job.path, hash: hash, fromCache: fromCache, functions: funcs, globals: globals, err: err}
 			}
 		}()
 	}
@@ -318,6 +322,12 @@ func (s *Scanner) writeResults(resultsCh <-chan parseResult, sessionID int64, st
 	var funcBatch []*model.Function
 	var varBatch []*model.GlobalVariable
 	var parseErrors []string
+	type cacheEntry struct {
+		path, hash string
+		funcs      []*model.Function
+		globals    []*model.GlobalVariable
+	}
+	var cacheBatch []cacheEntry
 
 	result.Functions = result.Functions[:0]
 	result.GlobalVars = result.GlobalVars[:0]
@@ -344,6 +354,11 @@ func (s *Scanner) writeResults(resultsCh <-chan parseResult, sessionID int64, st
 		result.Functions = append(result.Functions, res.functions...)
 		result.GlobalVars = append(result.GlobalVars, res.globals...)
 
+		// 只缓存实际解析的结果（跳过从 AST 缓存命中的，避免不必要的重写）
+		if res.hash != "" && !res.fromCache {
+			cacheBatch = append(cacheBatch, cacheEntry{path: res.path, hash: res.hash, funcs: res.functions, globals: res.globals})
+		}
+
 		if len(funcBatch) >= batchFlushThreshold || len(varBatch) >= batchFlushThreshold {
 			if err := s.flushBatch(funcBatch, varBatch, sessionID); err != nil {
 				return err
@@ -356,6 +371,20 @@ func (s *Scanner) writeResults(resultsCh <-chan parseResult, sessionID int64, st
 	// 刷新最后一批
 	if err := s.flushBatch(funcBatch, varBatch, sessionID); err != nil {
 		return err
+	}
+
+	// flushBatch 事务结束后，统一写入缓存（无锁冲突）
+	for _, ce := range cacheBatch {
+		if s.Store != nil {
+			if err := s.Store.UpsertASTCache(ce.path, ce.hash, ce.funcs, ce.globals); err != nil && s.Verbose {
+				fmt.Fprintf(os.Stderr, "warn: ast-cache write failed %s: %v\n", ce.path, err)
+			}
+			if fi, statErr := os.Stat(ce.path); statErr == nil {
+				if err := s.Store.UpsertFileCache(ce.path, fi.ModTime().Unix(), "", sessionID); err != nil && s.Verbose {
+					fmt.Fprintf(os.Stderr, "warn: file-cache write failed %s: %v\n", ce.path, err)
+				}
+			}
+		}
 	}
 
 	result.Errors = parseErrors
@@ -423,22 +452,27 @@ func (s *Scanner) finalizeSession(sessionID int64, start time.Time, fileCount in
 		fmt.Fprintf(os.Stderr, "warn: ComputeFileMetrics: %v\n", err)
 	}
 
+	// 用 DB 真实去重计数替代 result.Functions（后者仅含本轮进入 parseFile 的文件）
+	var realFuncCount, realVarCount int
+	s.Store.DB.QueryRow("SELECT COUNT(*) FROM (SELECT DISTINCT file_path, name, line_start FROM functions)").Scan(&realFuncCount)
+	s.Store.DB.QueryRow("SELECT COUNT(*) FROM (SELECT DISTINCT file_path, name, line_num FROM global_vars)").Scan(&realVarCount)
+
 	result.Duration = time.Since(start)
 	result.Session.ID = sessionID
 	result.Session.FileCount = fileCount
-	result.Session.FuncCount = len(result.Functions)
-	result.Session.VarCount = len(result.GlobalVars)
+	result.Session.FuncCount = realFuncCount
+	result.Session.VarCount = realVarCount
 	result.Session.Duration = result.Duration.Milliseconds()
 
 	s.Store.Checkpoint()
 }
 
 // parseFile 解析单个文件，自动处理编码，返回 (函数列表, 全局变量列表, 错误)
-func (s *Scanner) parseFile(path string) ([]*model.Function, []*model.GlobalVariable, error) {
+func (s *Scanner) parseFile(path string) ([]*model.Function, []*model.GlobalVariable, string, bool, error) {
 	ext := strings.ToLower(filepath.Ext(path))
 	p := s.Registry.GetByExt(ext)
 	if p == nil {
-		return nil, nil, nil
+		return nil, nil, "", false, nil
 	}
 
 	// 预检文件大小，防止大文件 OOM
@@ -448,7 +482,7 @@ func (s *Scanner) parseFile(path string) ([]*model.Function, []*model.GlobalVari
 				fmt.Fprintf(os.Stderr, "warn: 跳过超大文件 %s (%d bytes, max=%d)\n",
 					path, fi.Size(), s.MaxFileSize)
 			}
-			return nil, nil, nil
+			return nil, nil, "", false, nil
 		}
 	} else if s.Verbose {
 		fmt.Fprintf(os.Stderr, "warn: stat %s: %v\n", path, statErr)
@@ -456,7 +490,7 @@ func (s *Scanner) parseFile(path string) ([]*model.Function, []*model.GlobalVari
 
 	content, err := os.ReadFile(path)
 	if err != nil {
-		return nil, nil, fmt.Errorf("read file: %w", err)
+		return nil, nil, "", false, fmt.Errorf("read file: %w", err)
 	}
 
 	// 编码检测与转换
@@ -465,7 +499,7 @@ func (s *Scanner) parseFile(path string) ([]*model.Function, []*model.GlobalVari
 		if s.Verbose {
 			fmt.Fprintf(os.Stderr, "warn: 编码转换失败 %s (%s): %v\n", path, encoding, err)
 		}
-		return nil, nil, nil
+		return nil, nil, "", false, nil
 	}
 	if encoding != "utf-8" && s.Verbose {
 		fmt.Fprintf(os.Stderr, "info: %s 编码为 %s，已转换为 UTF-8\n", path, encoding)
@@ -476,7 +510,7 @@ func (s *Scanner) parseFile(path string) ([]*model.Function, []*model.GlobalVari
 		if s.Verbose {
 			fmt.Fprintf(os.Stderr, "warn: 跳过二进制文件: %s\n", path)
 		}
-		return nil, nil, nil
+		return nil, nil, "", false, nil
 	}
 
 	// 计算内容哈希用于 AST 缓存
@@ -491,14 +525,14 @@ func (s *Scanner) parseFile(path string) ([]*model.Function, []*model.GlobalVari
 			if s.Verbose {
 				fmt.Fprintf(os.Stderr, "ast-cache hit: %s\n", path)
 			}
-			return cachedFuncs, cachedGlobals, nil
+			return cachedFuncs, cachedGlobals, hash, true, nil
 		}
 	}
 
 	// 解析函数
 	funcs, err := p.Parse(path, content)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, "", false, err
 	}
 	// 解析全局变量
 	globals, err := p.Globals(path, content)
@@ -510,14 +544,8 @@ func (s *Scanner) parseFile(path string) ([]*model.Function, []*model.GlobalVari
 		globals = nil
 	}
 
-	// 写入 AST 缓存（非阻塞）
-	if s.Store != nil {
-		if cacheErr := s.Store.UpsertASTCache(path, hash, funcs, globals); cacheErr != nil && s.Verbose {
-			fmt.Fprintf(os.Stderr, "warn: ast-cache write failed %s: %v\n", path, cacheErr)
-		}
-	}
-
-	return funcs, globals, nil
+	// AST 缓存由 writeResults 在 flushBatch 事务结束后统一写入，避免 SQLITE_BUSY
+	return funcs, globals, hash, false, nil
 }
 
 // detectAndConvertEncoding 检测并转换文件编码为 UTF-8

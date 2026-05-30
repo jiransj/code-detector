@@ -26,6 +26,7 @@ type Store struct {
 	depsMu      sync.Mutex // [3] 保护依赖关系批量写入
 	globalVarMu sync.Mutex // [4] 保护全局变量批量写入
 	astCacheMu  sync.Mutex // [5] 保护 AST 缓存写入（多 worker 并发冲突）
+	fileCacheMu sync.Mutex // [6] 保护 file_cache 写入
 
 	// 缓存预处理语句，避免每次批次重新 prepare
 	funcInsertStmt      *sql.Stmt
@@ -105,23 +106,16 @@ func (s *Store) pruneOldSessionsLocked(keepCount int) error {
 		return nil
 	}
 
-	// 构建 IN 子句
+	// 将数据从即将删除的 session 迁移到最新 session，避免 CASCADE 导致数据丢失
+	var maxID int64
+	s.DB.QueryRow("SELECT MAX(id) FROM scan_sessions").Scan(&maxID)
 	for _, sid := range oldIDs {
-		// 按外键依赖顺序删除：function_deps → functions → global_vars → file_cache → scan_sessions
-		if _, err := s.DB.Exec(
-			`DELETE FROM function_deps WHERE caller_id IN (SELECT id FROM functions WHERE session_id = ?)`, sid,
-		); err != nil {
-			return fmt.Errorf("delete deps for session %d: %w", sid, err)
-		}
-		if _, err := s.DB.Exec(`DELETE FROM functions WHERE session_id = ?`, sid); err != nil {
-			return fmt.Errorf("delete functions for session %d: %w", sid, err)
-		}
-		if _, err := s.DB.Exec(`DELETE FROM global_vars WHERE session_id = ?`, sid); err != nil {
-			return fmt.Errorf("delete vars for session %d: %w", sid, err)
-		}
-		if _, err := s.DB.Exec(`DELETE FROM file_cache WHERE session_id = ?`, sid); err != nil {
-			return fmt.Errorf("delete cache for session %d: %w", sid, err)
-		}
+		s.DB.Exec(`UPDATE OR IGNORE functions SET session_id = ? WHERE session_id = ?`, maxID, sid)
+		s.DB.Exec(`UPDATE OR IGNORE global_vars SET session_id = ? WHERE session_id = ?`, maxID, sid)
+		s.DB.Exec(`UPDATE OR IGNORE type_defs SET session_id = ? WHERE session_id = ?`, maxID, sid)
+		s.DB.Exec(`UPDATE OR IGNORE file_metrics SET session_id = ? WHERE session_id = ?`, maxID, sid)
+		s.DB.Exec(`UPDATE OR IGNORE file_cache SET session_id = ? WHERE session_id = ?`, maxID, sid)
+		// 利用 ON DELETE CASCADE 级联删除：删 session 行，剩下子表自动清除
 		if _, err := s.DB.Exec(`DELETE FROM scan_sessions WHERE id = ?`, sid); err != nil {
 			return fmt.Errorf("delete session %d: %w", sid, err)
 		}
@@ -221,7 +215,7 @@ func (s *Store) CheckExistingFuncHashes(sessionID int64, funcs []*model.Function
 		}
 	}
 
-	// 使用安全辅助函数构建 IN 查询
+	// 使用安全辅助函数构建 IN 查询（只查当前 session，避免跨会话去重导致 prune 时数据丢失）
 	inClause, args := buildInClause("file_path", filePaths)
 	query := `SELECT id, file_path, name, line_start, hash FROM functions WHERE session_id = ? AND ` + inClause
 	queryArgs := append([]interface{}{sessionID}, args...)
@@ -591,6 +585,8 @@ func (s *Store) GetFileCache(filePath string) (int64, string, bool, error) {
 
 // UpsertFileCache 插入或更新文件缓存
 func (s *Store) UpsertFileCache(filePath string, mtime int64, hash string, sessionID int64) error {
+	s.fileCacheMu.Lock()
+	defer s.fileCacheMu.Unlock()
 	_, err := s.DB.Exec(
 		`INSERT INTO file_cache (file_path, mtime, hash, session_id)
 		 VALUES (?, ?, ?, ?)
@@ -709,7 +705,7 @@ func (s *Store) ComputeFileMetrics(sessionID int64) error {
 	}
 
 	stmt, err := tx.Prepare(
-		`INSERT INTO file_metrics (session_id, file_path, language, func_count, total_lines,
+		`INSERT OR REPLACE INTO file_metrics (session_id, file_path, language, func_count, total_lines,
 		 avg_cyclomatic, max_cyclomatic, total_parameters, max_parameters,
 		 total_returns, total_statements, total_anon_funcs,
 		 public_funcs, private_funcs, methods_count)

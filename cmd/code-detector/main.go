@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"code-detector/internal/analyzer"
 	"code-detector/internal/config"
@@ -20,7 +19,7 @@ import (
 	"code-detector/internal/parser"
 )
 
-const version = "1.1"
+const version = "1.2"
 
 // cleanup 退出前需执行的清理（关闭 DB 确保 WAL 回归），main 中初始化，fatal 中调用
 var cleanup func()
@@ -47,15 +46,21 @@ func waitForExit() {
 		return
 	}
 
+	// 判断 stdin 是否为终端（交互模式）
+	fi, _ := os.Stdin.Stat()
+	isTerminal := fi != nil && (fi.Mode()&os.ModeCharDevice) != 0
+
+	if !isTerminal {
+		// 非交互模式（管道 / 重定向 / 双击启动），跳过等待
+		return
+	}
+
 	fmt.Print("\n按 Enter 键退出...")
 
 	// 尝试读取 stdin（终端模式下会阻塞等待 Enter）
 	var buf [1]byte
 	n, err := os.Stdin.Read(buf[:])
 	if n == 0 || err != nil {
-		// stdin 不可用（双击启动 / 管道 EOF）
-		// 等 3 秒让用户在窗口关闭前看到最终输出
-		time.Sleep(3 * time.Second)
 		return
 	}
 	if buf[0] == '\n' || buf[0] == '\r' {
@@ -308,13 +313,13 @@ func printBanner(projectRoot, dbPath string, scan *fscanner.Scanner, cfg *config
 }
 
 // printResults 输出扫描结果摘要
-func printResults(result *model.ScanResult, dbPath string) {
+func printResults(result *model.ScanResult, dbPath string, store *db.Store) {
 	fmt.Println("┌───────────────── 扫描结果 ─────────────────┐")
 	fmt.Printf(" │ 项目路径     %s\n", result.Session.ProjectRoot)
 	fmt.Printf(" │ 扫描用时     %v\n", result.Duration)
 	fmt.Printf(" │ 扫描文件     %d 个\n", result.FileCount)
-	fmt.Printf(" │ 发现函数     %d 个\n", len(result.Functions))
-	fmt.Printf(" │ 全局变量     %d 个\n", len(result.GlobalVars))
+	fmt.Printf(" │ 发现函数     %d 个\n", result.Session.FuncCount)
+	fmt.Printf(" │ 全局变量     %d 个\n", result.Session.VarCount)
 	fmt.Printf(" │ 跳过文件     %d 个\n", result.SkipCount)
 	if len(result.Errors) > 0 {
 		fmt.Printf(" │ 解析错误     %d 个\n", len(result.Errors))
@@ -322,27 +327,53 @@ func printResults(result *model.ScanResult, dbPath string) {
 	fmt.Printf(" │ 数据库       %s\n", dbPath)
 	fmt.Println(" └─────────────────────────────────────────────┘")
 
-	if len(result.Functions) > 0 {
+	// 从 DB 查询真实的语言分布（覆盖增量跳过导致的遗漏）
+	if store != nil {
 		langStats := make(map[string]int)
-		for _, f := range result.Functions {
-			langStats[f.Language]++
+		rows, err := store.DB.Query(
+			`SELECT language, COUNT(DISTINCT file_path || ':' || name || ':' || line_start)
+			 FROM functions GROUP BY language`,
+		)
+		if err == nil {
+			for rows.Next() {
+				var lang string
+				var cnt int
+				if rows.Scan(&lang, &cnt) == nil {
+					langStats[lang] = cnt
+				}
+			}
+			rows.Close()
 		}
-		fmt.Println("按语言统计 (函数):")
-		for lang, cnt := range langStats {
-			fmt.Printf("  %-12s %d 个\n", lang+":", cnt)
+		if len(langStats) > 0 {
+			fmt.Println("按语言统计 (函数):")
+			for lang, cnt := range langStats {
+				fmt.Printf("  %-12s %d 个\n", lang+":", cnt)
+			}
+			fmt.Println()
 		}
-		fmt.Println()
-	}
-	if len(result.GlobalVars) > 0 {
+
 		varStats := make(map[string]int)
-		for _, v := range result.GlobalVars {
-			varStats[v.Language]++
+		vrows, err := store.DB.Query(
+			`SELECT language, COUNT(DISTINCT file_path || ':' || name || ':' || line_num)
+			 FROM global_vars GROUP BY language`,
+		)
+		if err == nil {
+			for vrows.Next() {
+				var lang string
+				var cnt int
+				if vrows.Scan(&lang, &cnt) == nil {
+					varStats[lang] = cnt
+				}
+			}
+			vrows.Close()
 		}
-		fmt.Println("按语言统计 (全局变量):")
-		for lang, cnt := range varStats {
-			fmt.Printf("  %-12s %d 个\n", lang+":", cnt)
+		if len(varStats) > 0 {
+			fmt.Println("按语言统计 (全局变量):")
+			for lang, cnt := range varStats {
+				fmt.Printf("  %-12s %d 个\n", lang+":", cnt)
+			}
+			fmt.Println()
 		}
-		fmt.Println()
 	}
 }
 
@@ -452,9 +483,27 @@ func main() {
 	projectRoot := resolveProjectRoot()
 	_ = initProjectRoot(projectRoot)       // 验证路径
 	cfg := initConfig(cfgPath, verbose)
+
+	// 检查数据库是否已存在，用于智能增量
+	dbFile, _ := filepath.Abs(dbPath)
+	_, dbExists := os.Stat(dbFile)
+
 	store := initDB(dbPath, verbose)
 	cleanup = func() { store.Close() }
 	defer cleanup()
+
+	// 智能增量：数据库已存在且用户未手动指定 -incremental 时自动启用
+	if dbExists == nil && !incremental {
+		// 确认数据库中有历史会话数据
+		var sessionCount int
+		store.DB.QueryRow("SELECT COUNT(*) FROM scan_sessions").Scan(&sessionCount)
+		if sessionCount > 0 {
+			incremental = true
+			if verbose {
+				fmt.Fprintf(os.Stderr, "info: 数据库已存在历史数据，自动启用增量扫描\n")
+			}
+		}
+	}
 
 	if debug {
 		parser.DebugMode = true
@@ -484,7 +533,7 @@ func main() {
 		fatal("扫描失败: %v", err)
 	}
 
-	printResults(result, dbPath)
+	printResults(result, dbPath, store)
 	printCallGraph(buildGraph, store, result)
 	fmt.Println("扫描完成!")
 }
