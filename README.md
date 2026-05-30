@@ -32,16 +32,20 @@
 
 | 语言 | 内部名称 | 文件扩展名 | 解析器 |
 |------|----------|-----------|--------|
-| **Go** | `go` | `.go` | 专用解析器 |
-| **Python** | `python` | `.py` | 专用解析器 |
-| **Java** | `java` | `.java` | 专用解析器 |
-| **Kotlin** | `kotlin` | `.kt`, `.kts` | 专用解析器（复用 Java 解析器） |
-| **JavaScript** | `javascript` | `.js`, `.jsx`, `.mjs` | 专用解析器 |
-| **TypeScript** | `typescript` | `.ts`, `.tsx` | 专用解析器（复用 JS 解析器） |
-| **C#** | `csharp` | `.cs` | 专用解析器 |
-| **C/C++** | `cpp` | `.cpp`, `.cxx`, `.cc`, `.c`, `.h`, `.hpp` | 专用解析器 |
-| **Rust** | `rust` | `.rs` | 专用解析器 |
-| **Ruby** | `ruby` | `.rb` | 专用解析器 |
+| **Go** | `go` | `.go` | tree-sitter AST |
+| **Python** | `python` | `.py` | tree-sitter AST |
+| **Java** | `java` | `.java` | tree-sitter AST |
+| **Kotlin** | `kotlin` | `.kt`, `.kts` | tree-sitter AST 🆕 |
+| **Swift** | `swift` | `.swift` | tree-sitter AST 🆕 |
+| **JavaScript** | `javascript` | `.js`, `.jsx`, `.mjs` | tree-sitter AST |
+| **TypeScript** | `typescript` | `.ts`, `.tsx` | tree-sitter AST |
+| **PHP** | `php` | `.php` | tree-sitter AST 🆕 |
+| **Lua** | `lua` | `.lua` | tree-sitter AST 🆕 |
+| **Scala** | `scala` | `.scala` | tree-sitter AST 🆕 |
+| **C#** | `csharp` | `.cs` | tree-sitter AST |
+| **C/C++** | `cpp` | `.cpp`, `.cxx`, `.cc`, `.c`, `.h`, `.hpp` | tree-sitter AST |
+| **Rust** | `rust` | `.rs` | tree-sitter AST |
+| **Ruby** | `ruby` | `.rb` | tree-sitter AST |
 | **自定义语言** | — | 通过 `config.yaml` 扩展 | 通用正则解析器 |
 
 > 通过 `config.yaml` 配置文件可以为任意扩展名注册自定义正则解析规则，支持单行注释和块注释过滤。

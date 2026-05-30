@@ -32,16 +32,20 @@ Current version: **v0.8**
 
 | Language | Internal Name | File Extensions | Parser |
 |----------|---------------|-----------------|--------|
-| **Go** | `go` | `.go` | Dedicated parser |
-| **Python** | `python` | `.py` | Dedicated parser |
-| **Java** | `java` | `.java` | Dedicated parser |
-| **Kotlin** | `kotlin` | `.kt`, `.kts` | Dedicated parser (reuses Java parser) |
-| **JavaScript** | `javascript` | `.js`, `.jsx`, `.mjs` | Dedicated parser |
-| **TypeScript** | `typescript` | `.ts`, `.tsx` | Dedicated parser (reuses JS parser) |
-| **C#** | `csharp` | `.cs` | Dedicated parser |
-| **C/C++** | `cpp` | `.cpp`, `.cxx`, `.cc`, `.c`, `.h`, `.hpp` | Dedicated parser |
-| **Rust** | `rust` | `.rs` | Dedicated parser |
-| **Ruby** | `ruby` | `.rb` | Dedicated parser |
+| **Go** | `go` | `.go` | tree-sitter AST |
+| **Python** | `python` | `.py` | tree-sitter AST |
+| **Java** | `java` | `.java` | tree-sitter AST |
+| **Kotlin** | `kotlin` | `.kt`, `.kts` | tree-sitter AST 🆕 |
+| **Swift** | `swift` | `.swift` | tree-sitter AST 🆕 |
+| **JavaScript** | `javascript` | `.js`, `.jsx`, `.mjs` | tree-sitter AST |
+| **TypeScript** | `typescript` | `.ts`, `.tsx` | tree-sitter AST |
+| **PHP** | `php` | `.php` | tree-sitter AST 🆕 |
+| **Lua** | `lua` | `.lua` | tree-sitter AST 🆕 |
+| **Scala** | `scala` | `.scala` | tree-sitter AST 🆕 |
+| **C#** | `csharp` | `.cs` | tree-sitter AST |
+| **C/C++** | `cpp` | `.cpp`, `.cxx`, `.cc`, `.c`, `.h`, `.hpp` | tree-sitter AST |
+| **Rust** | `rust` | `.rs` | tree-sitter AST |
+| **Ruby** | `ruby` | `.rb` | tree-sitter AST |
 | **Custom languages** | — | Extendable via `config.yaml` | Generic regex parser |
 
 > You can register custom regex parsing rules for any file extension via the `config.yaml` configuration file, with support for single-line and block comment filtering.
