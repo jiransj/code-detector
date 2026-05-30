@@ -8,7 +8,7 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
-  <img src="https://img.shields.io/badge/version-v0.9-brightgreen.svg" alt="Version v0.9">
+  <img src="https://img.shields.io/badge/version-v1.0-brightgreen.svg" alt="Version v1.0">
   <img src="https://img.shields.io/badge/go-1.26-blue.svg" alt="Go 1.26">
   <img src="https://img.shields.io/badge/platform-windows%20%7C%20linux-lightgrey.svg" alt="Platform">
 </p>
@@ -24,7 +24,7 @@
 从函数角度审查项目的健壮性，函数的合理程度，是否重复造轮子
 排除无关上下文干扰，对code agent具有良好支持辅助作用
 
-当前版本：**v0.9**
+当前版本：**v1.0**
 
 ---
 
@@ -331,9 +331,9 @@ code-detector -query top=5 -format json
 
 ---
 
-## MCP 协议支持（v0.9 新增）
+## MCP 协议支持
 
-**code-detector** 从 v0.9 起支持 [MCP（Model Context Protocol）](https://modelcontextprotocol.io/) 服务器模式，让 AI 客户端（如 Claude Desktop）可以直接与 code-detector 交互，实时查询项目函数数据。
+**code-detector** 从 v1.0 起支持 [MCP（Model Context Protocol）](https://modelcontextprotocol.io/) 服务器模式，让 AI 客户端（如 Claude Desktop）可以直接与 code-detector 交互，实时查询项目函数数据。
 
 ### 启动方式
 
