@@ -345,7 +345,7 @@ code-detector -mcp [-db <数据库路径>]
 
 通过 stdio 传输 JSON-RPC 消息，兼容所有标准 MCP 客户端。
 
-### 16 个 MCP Tool
+### 17 个 MCP Tool
 
 | 工具名 | 功能说明 | 对应 CLI 查询 |
 |--------|---------|-------------|
@@ -365,6 +365,7 @@ code-detector -mcp [-db <数据库路径>]
 | `find_anonymous` | 含匿名函数的函数检测 | `anon` |
 | `file_metrics` | 文件级统计信息 | `files` |
 | `list_types` | 类型定义列表 | `types` |
+| `get_func_tree` | 🆕 递归提取函数及其所有传递依赖（含函数体） | `tree=NAME` |
 
 ### 6 个 MCP Resource
 
@@ -392,7 +393,7 @@ code-detector -mcp [-db <数据库路径>]
 }
 ```
 
-> 配置完成后，Claude Desktop 即可直接调用上述 16 个工具和 6 个资源来查询项目代码分析结果。
+> 配置完成后，Claude Desktop 即可直接调用上述 17 个工具和 6 个资源来查询项目代码分析结果。
 
 ---
 

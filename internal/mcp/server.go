@@ -17,7 +17,7 @@ func RunStdioServer(store *db.Store) error {
 	// 创建 MCP Server 实例
 	s := server.NewMCPServer(
 		"code-detector",
-		"1.0",
+		"1.1",
 		server.WithResourceCapabilities(true, true),
 		server.WithToolCapabilities(true),
 		server.WithLogging(),

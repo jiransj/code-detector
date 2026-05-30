@@ -147,6 +147,15 @@ func defineTools() []ToolHandler {
 			),
 			Handler: handleTypes,
 		},
+		{
+			Tool: mcp.NewTool("get_func_tree",
+				mcp.WithDescription("递归提取指定函数及其所有传递依赖的函数详情（含函数体、签名、圈复杂度等），BFS 遍历防循环"),
+				mcp.WithString("name",
+					mcp.Description("函数名称"),
+				),
+			),
+			Handler: handleFuncTree,
+		},
 	}
 }
 
@@ -329,4 +338,16 @@ func handleTypes(ctx context.Context, req mcp.CallToolRequest, store *db.Store) 
 		return mcp.NewToolResultJSON(filtered)
 	}
 	return mcp.NewToolResultJSON(defs)
+}
+
+func handleFuncTree(ctx context.Context, req mcp.CallToolRequest, store *db.Store) (*mcp.CallToolResult, error) {
+	name := req.GetString("name", "")
+	if name == "" {
+		return mcp.NewToolResultError("请提供函数名称 (name)"), nil
+	}
+	items, err := store.QueryFuncTree(name)
+	if err != nil {
+		return mcp.NewToolResultError("查询依赖树失败: " + err.Error()), nil
+	}
+	return mcp.NewToolResultJSON(items)
 }
