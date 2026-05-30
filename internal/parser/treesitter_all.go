@@ -13,6 +13,8 @@ import (
 	tspython "github.com/smacker/go-tree-sitter/python"
 	tsruby "github.com/smacker/go-tree-sitter/ruby"
 	tsrust "github.com/smacker/go-tree-sitter/rust"
+	tstypescript "github.com/smacker/go-tree-sitter/typescript/typescript"
+	tstypescriptTsx "github.com/smacker/go-tree-sitter/typescript/tsx"
 
 	"code-detector/internal/model"
 )
@@ -97,17 +99,32 @@ var tsLangRegistry = []tsLangDef{
 		CallQuery:  `(invocation_expression function: (identifier) @callee) @call`,
 		SelCallQuery: `(invocation_expression function: (member_access_expression name: (identifier) @callee)) @call`,
 	},
+	{
+		Name: "typescript", Extensions: []string{".ts"},
+		GetLang:    tsGetLang,
+		FuncQuery:  `(function_declaration name: (identifier) @name body: (statement_block) @body) @func`,
+		CallQuery:  `(call_expression function: (identifier) @callee) @call`,
+		SelCallQuery: `(call_expression function: (member_expression property: (property_identifier) @callee)) @call`,
+	},
+	{
+		Name: "tsx", Extensions: []string{".tsx"},
+		GetLang:    tsxGetLang,
+		FuncQuery:  `(function_declaration name: (identifier) @name body: (statement_block) @body) @func`,
+		CallQuery:  `(call_expression function: (identifier) @callee) @call`,
+		SelCallQuery: `(call_expression function: (member_expression property: (property_identifier) @callee)) @call`,
+	},
 }
 
 // 各语言的 GetLang 包装函数
 func pyGetLang() *sitter.Language   { return tspython.GetLanguage() }
 func javaGetLang() *sitter.Language  { return tsjava.GetLanguage() }
 func jsGetLang() *sitter.Language    { return tsjavascript.GetLanguage() }
-func tsGetLang() *sitter.Language    { return tsjavascript.GetLanguage() }
 func cppGetLang() *sitter.Language   { return tscpp.GetLanguage() }
 func rustGetLang() *sitter.Language  { return tsrust.GetLanguage() }
 func rubyGetLang() *sitter.Language  { return tsruby.GetLanguage() }
 func csGetLang() *sitter.Language    { return tscsharp.GetLanguage() }
+func tsGetLang() *sitter.Language    { return tstypescript.GetLanguage() }
+func tsxGetLang() *sitter.Language   { return tstypescriptTsx.GetLanguage() }
 
 // getLangExt 通过扩展名查找语言定义
 func getLangDef(ext string) *tsLangDef {

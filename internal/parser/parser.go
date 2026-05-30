@@ -76,8 +76,8 @@ func DefaultParsers() []ParserRegistration {
 		{NewTreeSitterParser(".cpp"), []string{".cpp", ".cxx", ".cc", ".c", ".h", ".hpp"}},
 		{NewTreeSitterParser(".rs"), []string{".rs"}},
 		{NewTreeSitterParser(".rb"), []string{".rb"}},
-		// 以下语言暂时没有 tree-sitter grammar，保留旧解析器
+		{NewTreeSitterParser(".ts"), []string{".ts", ".tsx"}},
+		// 仅 Kotlin 没有 tree-sitter grammar，保留旧解析器
 		{NewKotlinParser(), []string{".kt", ".kts"}},
-		{NewTypescriptParser(), []string{".ts", ".tsx"}},
 	}
 }
