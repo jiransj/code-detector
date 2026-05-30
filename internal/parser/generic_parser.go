@@ -177,14 +177,13 @@ func (p *GenericParser) Globals(filePath string, content []byte) ([]*model.Globa
 func extractPkgNameForStrategy(lines []string, commentMask []bool, strategy string) string {
 	switch strategy {
 	case "brace":
-		pkgRegex := regexp.MustCompile(`^\s*(?:package|namespace)\s+(?P<name>\w+)`)
 		for i, line := range lines {
 			if commentMask[i] {
 				continue
 			}
 			trimmed := strings.TrimSpace(line)
-			if matches := pkgRegex.FindStringSubmatch(trimmed); matches != nil {
-				nameIdx := pkgRegex.SubexpIndex("name")
+			if matches := genericPkgRegex.FindStringSubmatch(trimmed); matches != nil {
+				nameIdx := genericPkgRegex.SubexpIndex("name")
 				if nameIdx >= 0 && nameIdx < len(matches) {
 					return matches[nameIdx]
 				}
@@ -197,6 +196,9 @@ func extractPkgNameForStrategy(lines []string, commentMask []bool, strategy stri
 
 // genericCallRegex 通用函数调用匹配正则
 var genericCallRegex = regexp.MustCompile(`(?:(\w+)\.)?(\w+)\s*\(`)
+
+// genericPkgRegex 通用包名/命名空间匹配正则
+var genericPkgRegex = regexp.MustCompile(`^\s*(?:package|namespace)\s+(?P<name>\w+)`)
 
 // extractCallsFromBody 从函数体中提取调用（通用模式，委托给 extractCallStatsSimple）
 func extractCallsFromBody(body string) []string {
