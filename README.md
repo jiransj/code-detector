@@ -309,6 +309,7 @@ code-detector -query <模式> [-db <数据库路径>] [-format text|json]
 | `missing` | 列出被调用但找不到定义的函数名（用于发现依赖缺失） | `-query missing` |
 | `top=N` | 列出行数最多的 N 个函数（超大函数风险分析） | `-query top=10` |
 | `deep=N` | 列出嵌套深度 >= N 的函数（复杂度分析） | `-query deep=3` |
+| `tree=NAME` | 🆕 递归提取指定函数及其所有传递依赖（含函数体） | `-query tree=main` |
 | `complexity=N` | 🆕 列出圈复杂度最高的 N 个函数 | `-query complexity=5` |
 | `params=N` | 🆕 列出参数数量 >= N 的函数 | `-query params=5` |
 | `anon` | 🆕 列出包含匿名函数/闭包的函数 | `-query anon` |
@@ -325,6 +326,7 @@ code-detector -query func=main,Scan,InitDB
 code-detector -query summary -format json
 code-detector -query func=main -format json
 code-detector -query top=5 -format json
+code-detector -query tree=printBanner -format json
 ```
 
 启用 `-graph` 选项时，终端会输出调用关系统计摘要。

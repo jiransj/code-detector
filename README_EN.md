@@ -313,6 +313,7 @@ code-detector -query <mode> [-db <database_path>] [-format text|json]
 | `missing` | List called functions that have no definition (dependency analysis) | `-query missing` |
 | `top=N` | List the N largest functions by line count (risk analysis for oversized functions) | `-query top=10` |
 | `deep=N` | List functions with nesting depth >= N (complexity analysis) | `-query deep=3` |
+| `tree=NAME` | 🆕 Recursively extract a function and all its transitive dependencies (with function bodies) | `-query tree=main` |
 | `complexity=N` | 🆕 List top N functions by cyclomatic complexity | `-query complexity=5` |
 | `params=N` | 🆕 List functions with parameter count >= N | `-query params=5` |
 | `anon` | 🆕 List functions containing anonymous functions/closures | `-query anon` |
@@ -329,6 +330,7 @@ code-detector -query func=main,Scan,InitDB
 code-detector -query summary -format json
 code-detector -query func=main -format json
 code-detector -query top=5 -format json
+code-detector -query tree=printBanner -format json
 ```
 
 ---
