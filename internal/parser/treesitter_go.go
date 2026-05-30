@@ -720,8 +720,9 @@ func tsMakeFunc(name, body, fullText, pkgName, filePath string, root *sitter.Nod
 		visibility = "private"
 	}
 
-	// 从 AST 提取参数/返回值/接收器
-	tsExtractFuncSignature(name, root, queryStr, content, lang, &params, &returnTypes, &receiver)
+	// 从 AST 提取参数/返回值/接收器 + 参数个数（AST 原生计数）
+	paramCount := 0
+	tsExtractFuncSignature(name, root, queryStr, content, lang, &params, &returnTypes, &receiver, &paramCount)
 
 	// 复杂度分析
 	cyclomatic := 0
@@ -753,7 +754,7 @@ func tsMakeFunc(name, body, fullText, pkgName, filePath string, root *sitter.Nod
 		IsMethod:        isMethod,
 		Visibility:      visibility,
 		Cyclomatic:      cyclomatic,
-		ParameterCount:  tsCountParams(params),
+		ParameterCount:  paramCount,
 		ReturnCount:     returnCount,
 		StatementCount:  statementCount,
 		AnonymousFuncs:  anonCount,
@@ -761,7 +762,8 @@ func tsMakeFunc(name, body, fullText, pkgName, filePath string, root *sitter.Nod
 }
 
 // tsExtractFuncSignature 从 AST 提取函数参数、返回类型和接收器
-func tsExtractFuncSignature(name string, root *sitter.Node, queryStr string, content []byte, lang *sitter.Language, params, returnTypes, receiver *string) {
+// 使用 tree-sitter 原生 field 名：parameters / result / receiver
+func tsExtractFuncSignature(name string, root *sitter.Node, queryStr string, content []byte, lang *sitter.Language, params, returnTypes, receiver *string, paramCount *int) {
 	q, err := sitter.NewQuery([]byte(queryStr), lang)
 	if err != nil || q == nil {
 		return
@@ -793,41 +795,25 @@ func tsExtractFuncSignature(name string, root *sitter.Node, queryStr string, con
 		if foundName != name || funcNode == nil {
 			continue
 		}
-		// 遍历子节点找 parameters / result / receiver
-		for i := 0; i < int(funcNode.ChildCount()); i++ {
-			child := funcNode.Child(i)
-			if child == nil {
-				continue
-			}
-			switch child.Type() {
-			case "parameter_list":
-				if *params == "" {
-					*params = child.Content(content)
-				}
-			case "receiver":
-				// 方法接收器: 取其内部的 parameter_list
-				for j := 0; j < int(child.ChildCount()); j++ {
-					grand := child.Child(j)
-					if grand != nil && grand.Type() == "parameter_list" {
-						*receiver = grand.Content(content)
-						break
-					}
-				}
-			default:
-				// 可能为返回类型
-				if child.Type() == "type_identifier" || child.Type() == "pointer_type" ||
-					child.Type() == "qualified_type" || child.Type() == "generic_type" ||
-					child.Type() == "function_type" || child.Type() == "interface_type" ||
-					child.Type() == "array_type" || child.Type() == "slice_type" ||
-					child.Type() == "map_type" || child.Type() == "channel_type" ||
-					child.Type() == "struct_type" || child.Type() == "named_type" {
-					if *returnTypes == "" {
-						*returnTypes = child.Content(content)
-					} else {
-						*returnTypes = *returnTypes + ", " + child.Content(content)
-					}
-				}
-			}
+
+		// 使用 tree-sitter 原生 field 名提取签名信息
+		// Go grammar: function_declaration/method_declaration 定义了
+		//   parameters: (parameter_list)
+		//   result: (_)?           ← 返回值节点（单值或 parameter_list）
+		//   receiver: (parameter_list)  ← 仅 method_declaration
+
+		if paramNode := funcNode.ChildByFieldName("parameters"); paramNode != nil {
+			*params = paramNode.Content(content)
+			// 使用 AST 原生 NamedChildCount 计数参数个数
+			// 每个 parameter_declaration 是一个 named child
+			*paramCount = int(paramNode.NamedChildCount())
+		}
+		if resultNode := funcNode.ChildByFieldName("result"); resultNode != nil {
+			*returnTypes = resultNode.Content(content)
+		}
+		if recvNode := funcNode.ChildByFieldName("receiver"); recvNode != nil {
+			// 接收器本身是 parameter_list，取其内部文本
+			*receiver = recvNode.Content(content)
 		}
 		break
 	}
@@ -910,15 +896,6 @@ func tsCountStatements(node *sitter.Node) int {
 	return count
 }
 
-// tsCountParams 从参数字符串统计参数个数
-func tsCountParams(params string) int {
-	if params == "" || params == "()" {
-		return 0
-	}
-	// 简单的括号内逗号计数
-	inner := strings.TrimSpace(params[1 : len(params)-1])
-	if inner == "" {
-		return 0
-	}
-	return strings.Count(inner, ",") + 1
-}
+// tsCountParams 已废弃 —— 改用 tree-sitter AST 原生 ChildByFieldName("parameters").NamedChildCount()
+// 保留该函数仅用于兼容外部调用，直接返回 0 表示不应再被使用
+func tsCountParams(params string) int { return 0 }
