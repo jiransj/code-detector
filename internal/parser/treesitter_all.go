@@ -9,7 +9,6 @@ import (
 	sitter "github.com/smacker/go-tree-sitter"
 	tscpp "github.com/smacker/go-tree-sitter/cpp"
 	tscsharp "github.com/smacker/go-tree-sitter/csharp"
-	tsembedded "code-detector/internal/parser/erb"
 	tsjava "github.com/smacker/go-tree-sitter/java"
 	tsjavascript "github.com/smacker/go-tree-sitter/javascript"
 	tskotlin "github.com/smacker/go-tree-sitter/kotlin"
@@ -105,18 +104,7 @@ var tsLangRegistry = []tsLangDef{
 		ConstQuery: `(source_file (const_item name: (identifier) @name type: (_)? @type value: (_)? @value) @decl)`,
 	},
 	{
-		Name: "embedded_template", Extensions: []string{".erb"},
-		GetLang:    erbGetLang,
-		// embedded_template 的 AST: directive (代码块)/output_directive (输出)/content (文本)
-		// 捕获 directive 节点整体作为函数体，code 子节点作为 name 占位
-		FuncQuery:  `(directive) @func`,
-		CallQuery:  ``,
-		PkgQuery:   ``,
-		VarQuery:   ``,
-		ConstQuery: ``,
-	},
-	{
-		Name: "ruby", Extensions: []string{".rb"},
+		Name: "ruby", Extensions: []string{".rb", ".erb"},
 		GetLang:    rubyGetLang,
 		FuncQuery:  `(method name: (identifier) @name body: (body_statement) @body) @func`,
 		CallQuery:  `(call method: (identifier) @callee) @call`,
@@ -205,7 +193,6 @@ func jsGetLang() *sitter.Language    { return tsjavascript.GetLanguage() }
 func cppGetLang() *sitter.Language   { return tscpp.GetLanguage() }
 func rustGetLang() *sitter.Language  { return tsrust.GetLanguage() }
 func rubyGetLang() *sitter.Language  { return tsruby.GetLanguage() }
-func erbGetLang() *sitter.Language  { return tsembedded.GetLanguage() }
 func csGetLang() *sitter.Language    { return tscsharp.GetLanguage() }
 func tsGetLang() *sitter.Language    { return tstypescript.GetLanguage() }
 func tsxGetLang() *sitter.Language   { return tstypescriptTsx.GetLanguage() }
@@ -256,12 +243,12 @@ func (p *TreeSitterParser) Parse(filePath string, content []byte) ([]*model.Func
 	pkgName := tsFirstFor(root, def.PkgQuery, "pkg", content, lang)
 	results := make([]*model.Function, 0)
 
-	tsEachFor(root, def.FuncQuery, content, lang, func(name, body, fullText string) {
-		if name == "" || fullText == "" {
+	tsEachFor(root, def.FuncQuery, content, lang, func(name, body, fullText string, bodyNode, funcNode *sitter.Node) {
+		if name == "" || fullText == "" || bodyNode == nil || funcNode == nil {
 			return
 		}
-		lineStart, lineEnd := tsFindLineFor(name, root, def.FuncQuery, content, lang)
-		bodyNode := tsFindBodyFor(name, root, def.FuncQuery, content, lang)
+		lineStart := int(funcNode.StartPoint().Row) + 1
+		lineEnd := int(funcNode.EndPoint().Row) + 1
 		stats := tsAnalyzeCallsFor(bodyNode, content, lang, def.CallQuery, def.SelCallQuery, def.Keywords)
 		results = append(results, &model.Function{
 			Name: name, PackageName: pkgName, Language: def.Name,
@@ -480,7 +467,7 @@ func tsParseRootFor(content []byte, lang *sitter.Language) (*sitter.Node, error)
 	return root, nil
 }
 
-func tsEachFor(root *sitter.Node, queryStr string, content []byte, lang *sitter.Language, fn func(name, body, fullText string)) {
+func tsEachFor(root *sitter.Node, queryStr string, content []byte, lang *sitter.Language, fn func(name, body, fullText string, bodyNode, funcNode *sitter.Node)) {
 	if queryStr == "" {
 		return
 	}
@@ -500,6 +487,7 @@ func tsEachFor(root *sitter.Node, queryStr string, content []byte, lang *sitter.
 			break
 		}
 		var name, body, fullText string
+		var bodyNode, funcNode *sitter.Node
 		for _, c := range m.Captures {
 			if c.Node == nil {
 				continue
@@ -509,12 +497,14 @@ func tsEachFor(root *sitter.Node, queryStr string, content []byte, lang *sitter.
 				name = strings.TrimSpace(c.Node.Content(content))
 			case "body":
 				body = c.Node.Content(content)
+				bodyNode = c.Node
 			case "func":
 				fullText = c.Node.Content(content)
+				funcNode = c.Node
 			}
 		}
 		if name != "" && fullText != "" {
-			fn(name, body, fullText)
+			fn(name, body, fullText, bodyNode, funcNode)
 		}
 	}
 }
@@ -543,82 +533,6 @@ func tsFirstFor(root *sitter.Node, queryStr, capName string, content []byte, lan
 		}
 	}
 	return ""
-}
-
-func tsFindLineFor(name string, root *sitter.Node, queryStr string, content []byte, lang *sitter.Language) (int, int) {
-	if queryStr == "" {
-		return 0, 0
-	}
-	q := tsAllQueries.get(lang, queryStr)
-	if q == nil {
-		return 0, 0
-	}
-	cursor := sitter.NewQueryCursor()
-	if cursor == nil {
-		return 0, 0
-	}
-	defer cursor.Close()
-	cursor.Exec(q, root)
-	for {
-		m, ok := cursor.NextMatch()
-		if !ok {
-			break
-		}
-		var foundName string
-		var funcNode *sitter.Node
-		for _, c := range m.Captures {
-			switch q.CaptureNameForId(c.Index) {
-			case "name":
-				if c.Node != nil {
-					foundName = strings.TrimSpace(c.Node.Content(content))
-				}
-			case "func":
-				funcNode = c.Node
-			}
-		}
-		if foundName == name && funcNode != nil {
-			return int(funcNode.StartPoint().Row) + 1, int(funcNode.EndPoint().Row) + 1
-		}
-	}
-	return 0, 0
-}
-
-func tsFindBodyFor(name string, root *sitter.Node, queryStr string, content []byte, lang *sitter.Language) *sitter.Node {
-	if queryStr == "" {
-		return nil
-	}
-	q := tsAllQueries.get(lang, queryStr)
-	if q == nil {
-		return nil
-	}
-	cursor := sitter.NewQueryCursor()
-	if cursor == nil {
-		return nil
-	}
-	defer cursor.Close()
-	cursor.Exec(q, root)
-	for {
-		m, ok := cursor.NextMatch()
-		if !ok {
-			break
-		}
-		var foundName string
-		var bodyNode *sitter.Node
-		for _, c := range m.Captures {
-			switch q.CaptureNameForId(c.Index) {
-			case "name":
-				if c.Node != nil {
-					foundName = strings.TrimSpace(c.Node.Content(content))
-				}
-			case "body":
-				bodyNode = c.Node
-			}
-		}
-		if foundName == name {
-			return bodyNode
-		}
-	}
-	return nil
 }
 
 func tsAnalyzeCallsFor(bodyNode *sitter.Node, content []byte, lang *sitter.Language, callQuery, selCallQuery string, keywords map[string]bool) *model.CallStats {
