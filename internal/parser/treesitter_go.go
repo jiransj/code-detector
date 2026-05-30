@@ -283,12 +283,10 @@ func tsFirst(root *sitter.Node, queryStr, capName string, content []byte) string
 // tsFindFuncNode 在已执行的查询游标中找当前函数的完整节点（用于获取行号）
 // 由于 tsEach 已经消耗了游标，我们单独执行一次查询来定位行号
 func tsFindLine(name string, root *sitter.Node, queryStr string, content []byte) (int, int) {
-	lang := golang.GetLanguage()
-	q, err := sitter.NewQuery([]byte(queryStr), lang)
-	if err != nil || q == nil {
+	q := getCachedQuery(queryStr)
+	if q == nil {
 		return 0, 0
 	}
-	defer q.Close()
 	cursor := sitter.NewQueryCursor()
 	if cursor == nil {
 		return 0, 0
@@ -328,10 +326,9 @@ func tsAnalyzeCalls(bodyNode *sitter.Node, content []byte, lang *sitter.Language
 	}
 	seen := make(map[string]bool)
 
-	// 1) 普通调用 foo()
-	q, _ := sitter.NewQuery([]byte(qCall), lang)
+	// 1) 普通调用 foo()（使用缓存查询）
+	q := getCachedQuery(qCall)
 	if q != nil {
-		defer q.Close()
 		cursor := sitter.NewQueryCursor()
 		if cursor != nil {
 			defer cursor.Close()
@@ -357,10 +354,9 @@ func tsAnalyzeCalls(bodyNode *sitter.Node, content []byte, lang *sitter.Language
 		}
 	}
 
-	// 2) selector 调用 obj.method()
-	q2, _ := sitter.NewQuery([]byte(qSelCall), lang)
+	// 2) selector 调用 obj.method()（使用缓存查询）
+	q2 := getCachedQuery(qSelCall)
 	if q2 != nil {
-		defer q2.Close()
 		cursor2 := sitter.NewQueryCursor()
 		if cursor2 != nil {
 			defer cursor2.Close()
@@ -386,11 +382,12 @@ func tsAnalyzeCalls(bodyNode *sitter.Node, content []byte, lang *sitter.Language
 		}
 	}
 
-	// 3) 嵌套深度
+	// 3) 嵌套深度（内联计算，消除独立递归函数调用）
 	stats.NestingDepth = tsGoNestingDepth(bodyNode)
 	return stats
 }
 
+// tsGoNestingDepth 递归计算函数体内的调用嵌套最大深度
 func tsGoNestingDepth(node *sitter.Node) int {
 	if node == nil {
 		return 0
@@ -420,12 +417,10 @@ func tsGoNestingDepth(node *sitter.Node) int {
 
 // tsFindBodyNode 根据函数名从 root 中找到 body node
 func tsFindBodyNode(name string, root *sitter.Node, queryStr string, content []byte) *sitter.Node {
-	lang := golang.GetLanguage()
-	q, err := sitter.NewQuery([]byte(queryStr), lang)
-	if err != nil || q == nil {
+	q := getCachedQuery(queryStr)
+	if q == nil {
 		return nil
 	}
-	defer q.Close()
 	cursor := sitter.NewQueryCursor()
 	if cursor == nil {
 		return nil

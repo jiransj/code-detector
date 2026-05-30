@@ -504,10 +504,12 @@ func tsAnalyzeCallsFor(bodyNode *sitter.Node, content []byte, lang *sitter.Langu
 		}
 	}
 
+	// 嵌套深度（内联计算）
 	stats.NestingDepth = tsNestingDepth(bodyNode)
 	return stats
 }
 
+// tsNestingDepth 递归计算函数体内的调用嵌套最大深度
 func tsNestingDepth(node *sitter.Node) int {
 	if node == nil {
 		return 0
