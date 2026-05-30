@@ -26,8 +26,7 @@ func (p *GenericParser) Parse(filePath string, content []byte) ([]*model.Functio
 	lines := fl.Lines()
 	text := fl.Text()
 
-	commentMask := makeCommentMask(lines, p.config.SingleComment, p.config.BlockComment)
-	stringMask := makeStringMask(lines)
+	commentMask, stringMask := makeMasks(lines, p.config.SingleComment, p.config.BlockComment)
 
 	funcRegex, err := regexp.Compile(p.config.FunctionRegex)
 	if err != nil {
