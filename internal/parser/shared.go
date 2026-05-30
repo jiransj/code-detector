@@ -101,6 +101,75 @@ func makeStringMask(lines []string) []bool {
 	return mask
 }
 
+// makeMasks 合并 makeCommentMask + makeStringMask 为单趟扫描
+// 减少对 lines 的完整遍历次数：从 2 次降为 1 次
+func makeMasks(lines []string, singleComments []string, blockComments [][2]string) (commentMask, stringMask []bool) {
+	commentMask = make([]bool, len(lines))
+	stringMask = make([]bool, len(lines))
+	inBlock := false
+	inRaw := false
+	inInterp := false
+	for i, line := range lines {
+		// ── 注释检测 ──
+		if inBlock {
+			commentMask[i] = true
+			for _, bc := range blockComments {
+				if idx := strings.Index(line, bc[1]); idx >= 0 {
+					inBlock = false
+					break
+				}
+			}
+		} else {
+			trimmed := strings.TrimSpace(line)
+			for _, sc := range singleComments {
+				if strings.HasPrefix(trimmed, sc) {
+					commentMask[i] = true
+					break
+				}
+			}
+			if !commentMask[i] {
+				for _, bc := range blockComments {
+					if idx := strings.Index(line, bc[0]); idx >= 0 {
+						if endIdx := strings.Index(line[idx+len(bc[0]):], bc[1]); endIdx >= 0 {
+							continue
+						}
+						inBlock = true
+						commentMask[i] = true
+						break
+					}
+				}
+			}
+		}
+
+		// ── 字符串检测 ──
+		if inRaw {
+			stringMask[i] = true
+			if strings.Contains(line, "`") {
+				inRaw = false
+			}
+		} else if inInterp {
+			stringMask[i] = true
+			if strings.Contains(line, "\"") {
+				inInterp = false
+			}
+		} else {
+			if strings.Contains(line, "`") {
+				stringMask[i] = true
+				if !strings.HasSuffix(strings.TrimSpace(line), "`") {
+					inRaw = true
+				}
+			}
+			if strings.Contains(line, "\"") && !stringMask[i] {
+				stringMask[i] = true
+				if !strings.HasSuffix(strings.TrimSpace(line), "\"") {
+					inInterp = true
+				}
+			}
+		}
+	}
+	return
+}
+
 func countIndent(line string) int {
 	count := 0
 	for _, ch := range line {
