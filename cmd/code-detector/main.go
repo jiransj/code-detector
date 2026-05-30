@@ -20,7 +20,7 @@ import (
 	"code-detector/internal/parser"
 )
 
-const version = "1.0"
+const version = "1.1"
 
 // cleanup 退出前需执行的清理（关闭 DB 确保 WAL 回归），main 中初始化，fatal 中调用
 var cleanup func()
@@ -494,6 +494,7 @@ func parseFlags() (dbPath string, cfgPath string, langs string, skipDirs string,
                     missing     列出缺失的依赖
                     top=N       列出最大的 N 个函数
                     deep=N      列出深层嵌套函数
+                    tree=NAME   递归提取函数及其所有传递依赖（含函数体）
   -v               显示版本号
 
 示例:
@@ -506,6 +507,8 @@ func parseFlags() (dbPath string, cfgPath string, langs string, skipDirs string,
   code-detector -query func=main
   code-detector -query dead
   code-detector -query top=10
+  code-detector -query tree=main
+  code-detector -query tree=Parse
   code-detector -mcp
 `, version)
 	}
@@ -602,8 +605,14 @@ func runQueryMode(dbPath string, queryMode string) {
 		printQueryFiles(store)
 	case "types":
 		printQueryTypes(store)
+	case "tree":
+		if param == "" {
+			fmt.Println("用法: -query tree=函数名")
+			return
+		}
+		printQueryTree(store, param)
 	default:
-		fmt.Fprintf(os.Stderr, "未知的查询模式: %s\n可用模式: summary, functions, func=NAME, vars, deps, calls=NAME, dead, missing, top=N, deep=N, complexity=N, params=N, anon, files, types\n", queryMode)
+		fmt.Fprintf(os.Stderr, "未知的查询模式: %s\n可用模式: summary, functions, func=NAME, vars, deps, calls=NAME, dead, missing, top=N, deep=N, complexity=N, params=N, anon, files, types, tree=NAME\n", queryMode)
 	}
 }
 
@@ -824,6 +833,102 @@ func printQueryFuncDetail(store *db.Store, param string) {
 		}
 		fmt.Println()
 	}
+}
+
+// printQueryTree 递归展示函数及其所有传递依赖的完整信息（含函数体）
+func printQueryTree(store *db.Store, param string) {
+	items, err := store.QueryFuncTree(param)
+	if err != nil {
+		fatal("查询依赖树失败: %v", err)
+	}
+	if len(items) == 0 {
+		fmt.Printf("未找到函数: %s\n", param)
+		return
+	}
+
+	if outputFormat == "json" {
+		jsonOut(items)
+		return
+	}
+
+	// 按深度排序输出，同深度按名称排序
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Depth != items[j].Depth {
+			return items[i].Depth < items[j].Depth
+		}
+		return items[i].Func.Name < items[j].Func.Name
+	})
+
+	fmt.Printf("╔══════════════════════════════════════════╗\n")
+	fmt.Printf("║  依赖树: %-30s ║\n", param)
+	fmt.Printf("╚══════════════════════════════════════════╝\n")
+	fmt.Printf("  共 %d 个函数（含递归依赖）\n\n", len(items))
+
+	for i, item := range items {
+		f := item.Func
+		indent := ""
+		for j := 0; j < item.Depth; j++ {
+			indent += "  "
+		}
+		prefix := ""
+		if item.Depth == 0 {
+			prefix = "◎ "
+		} else if item.Depth == 1 {
+			prefix = "├─ "
+		} else {
+			prefix = "└  "
+		}
+
+		fmt.Printf("─── [%d/%d] %s%s (%s) ─────────────────\n", i+1, len(items), indent+prefix, f.Name, f.Language)
+		if f.FilePath != "" {
+			fileLoc := f.FilePath
+			fmt.Printf("  位置:     %s L%d-L%d (%d 行)\n", fileLoc, f.LineStart, f.LineEnd, f.LineCount)
+		}
+		if f.PackageName != "" {
+			fmt.Printf("  包:       %s\n", f.PackageName)
+		}
+		if f.Parameters != "" {
+			fmt.Printf("  参数:     %s\n", f.Parameters)
+		}
+		if f.ReturnTypes != "" {
+			fmt.Printf("  返回:     %s\n", f.ReturnTypes)
+		}
+		if f.IsMethod {
+			fmt.Printf("  接收器:   %s\n", f.Receiver)
+		}
+		if f.Visibility != "" {
+			fmt.Printf("  可见性:   %s\n", f.Visibility)
+		}
+		if f.Cyclomatic > 0 {
+			fmt.Printf("  圈复杂度: %d\n", f.Cyclomatic)
+		}
+		if len(item.Callees) > 0 {
+			fmt.Printf("  调用了 (%d): %s\n", len(item.Callees), strings.Join(item.Callees, ", "))
+		}
+		fmt.Printf("  深度:     %d\n", item.Depth)
+		fmt.Println()
+
+		// 函数体（完整输出，不超过 50 行）
+		if item.Body != "" {
+			lines := strings.Split(item.Body, "\n")
+			showLines := len(lines)
+			if showLines > 50 {
+				showLines = 50
+			}
+			fmt.Printf("  函数体 (前 %d / %d 行):\n", showLines, len(lines))
+			for _, line := range lines[:showLines] {
+				fmt.Printf("    %s\n", line)
+			}
+			if len(lines) > 50 {
+				fmt.Printf("    ... (剩余 %d 行)\n", len(lines)-50)
+			}
+		} else {
+			fmt.Printf("  函数体: (外部函数或未收录)\n")
+		}
+		fmt.Println()
+	}
+
+	fmt.Printf("─── 共计 %d 个函数 ───\n", len(items))
 }
 
 // printQueryVars 列出所有全局变量

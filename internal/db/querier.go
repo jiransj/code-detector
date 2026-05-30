@@ -40,6 +40,14 @@ type DepStat struct {
 	TotalCallCount int
 }
 
+// FuncTreeItem 依赖树中的单个函数节点
+type FuncTreeItem struct {
+	Func     *FuncBrief `json:"func"`
+	Body     string     `json:"body"`
+	Depth    int        `json:"depth"`
+	Callees  []string   `json:"callees"`
+}
+
 // ─── 查询 ──────────────────────────────────────────────
 
 func (s *Store) QuerySummary() (map[string]interface{}, error) {
@@ -355,6 +363,83 @@ func (s *Store) QueryTypeDefs() ([]*model.TypeDef, error) {
 		defs = append(defs, d)
 	}
 	return defs, rows.Err()
+}
+
+// QueryFuncTree 递归查询函数的依赖树（BFS，含传递闭包）
+// 返回以 rootName 为根的全部依赖函数（包含 root 自身），每层递归展开
+func (s *Store) QueryFuncTree(rootName string) ([]*FuncTreeItem, error) {
+	// 1. 找到根函数
+	roots, err := s.QueryFuncDetail(rootName)
+	if err != nil {
+		return nil, err
+	}
+	if len(roots) == 0 {
+		return nil, fmt.Errorf("未找到函数: %s", rootName)
+	}
+
+	// visited 防止循环依赖造成无限递归
+	visited := make(map[string]bool)
+	var result []*FuncTreeItem
+
+	// BFS 队列：元素为 (函数名, 深度)
+	type queueItem struct {
+		name  string
+		depth int
+	}
+	queue := []queueItem{{name: rootName, depth: 0}}
+	visited[rootName] = true
+
+	for len(queue) > 0 {
+		item := queue[0]
+		queue = queue[1:]
+
+		// 获取该函数的详细信息和 callees
+		funcs, err := s.QueryFuncDetail(item.name)
+		if err != nil || len(funcs) == 0 {
+			// 可能是外部依赖，跳过
+			body, _ := s.QueryFuncBodyByFuncName(item.name)
+			entry := &FuncTreeItem{
+				Func:    &FuncBrief{Name: item.name},
+				Body:    body,
+				Depth:   item.depth,
+				Callees: []string{},
+			}
+			result = append(result, entry)
+			continue
+		}
+
+		f := funcs[0]
+		body, _ := s.QueryFuncBody(f.ID)
+		deps, _ := s.QueryDependencies(f.ID)
+
+		entry := &FuncTreeItem{
+			Func:    f,
+			Body:    body,
+			Depth:   item.depth,
+			Callees: deps,
+		}
+		result = append(result, entry)
+
+		// 将未访问的 callee 加入队列
+		for _, dep := range deps {
+			if !visited[dep] {
+				visited[dep] = true
+				queue = append(queue, queueItem{name: dep, depth: item.depth + 1})
+			}
+		}
+	}
+
+	return result, nil
+}
+
+// QueryFuncBodyByFuncName 通过函数名获取任意匹配函数的 body（用于外部函数回退）
+func (s *Store) QueryFuncBodyByFuncName(name string) (string, error) {
+	var body string
+	err := s.DB.QueryRow(`SELECT body FROM functions WHERE name = ? LIMIT 1`, name).Scan(&body)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return body, err
 }
 
 // scanFuncBriefs 通用 FuncBrief 行扫描（含 AST 字段）
