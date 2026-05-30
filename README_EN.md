@@ -333,6 +333,69 @@ code-detector -query top=5 -format json
 
 ---
 
+## MCP Protocol Support (v0.9 New)
+
+Starting from v0.9, **code-detector** supports [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server mode, allowing AI clients (such as Claude Desktop) to interact directly with code-detector for real-time project function data queries.
+
+### How to Start
+
+```cmd
+code-detector -mcp [-db <database_path>]
+```
+
+Communicates via stdio using JSON-RPC messages, compatible with all standard MCP clients.
+
+### 16 MCP Tools
+
+| Tool Name | Description | Equivalent CLI Query |
+|-----------|-------------|---------------------|
+| `get_summary` | Database overview (sessions/functions/variables/language distribution) | `summary` |
+| `list_functions` | List all functions (filterable by language) | `functions` |
+| `get_function` | View function details (signature/complexity/dependencies) | `func=NAME` |
+| `get_function_body` | Get function body source code | (New) |
+| `list_variables` | List global variables | `vars` |
+| `analyze_deps` | Function call relationship statistics | `deps` |
+| `find_callers` | Find which functions call the specified function | `calls=NAME` |
+| `find_dead_code` | Dead code detection | `dead` |
+| `find_missing_deps` | Missing dependency detection | `missing` |
+| `top_functions` | Top N functions sorted by line count | `top=N` |
+| `deep_nesting` | Deep nesting detection | `deep=N` |
+| `high_complexity` | Top N functions by cyclomatic complexity | `complexity=N` |
+| `many_params` | Functions with excessive parameters | `params=N` |
+| `find_anonymous` | Functions containing anonymous functions/closures | `anon` |
+| `file_metrics` | File-level statistics | `files` |
+| `list_types` | List type definitions | `types` |
+
+### 6 MCP Resources
+
+| URI | Content | Format |
+|-----|---------|--------|
+| `db://summary` | Database summary | JSON |
+| `db://functions` | Full function list | JSON |
+| `db://variables` | Global variables list | JSON |
+| `db://files` | File-level statistics | JSON |
+| `db://types` | Type definitions | JSON |
+| `db://sessions/latest` | Latest scan session info | JSON |
+
+### Configuration Example (Claude Desktop)
+
+Add the following to your Claude Desktop `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "code-detector": {
+      "command": "code-detector.exe",
+      "args": ["-mcp", "-db", "D:\\projects\\myapp\\scaned_db\\scan_result.db"]
+    }
+  }
+}
+```
+
+> Once configured, Claude Desktop can directly call all 16 tools and 6 resources to query project code analysis results.
+
+---
+
 ## Safety Protection
 
 - The program has built-in **system critical directory protection**, refusing to scan Windows system drive root, `C:\Windows`, `/etc`, `/proc`, and other system directories to prevent disk thrashing or data corruption.

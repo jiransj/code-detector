@@ -331,6 +331,69 @@ code-detector -query top=5 -format json
 
 ---
 
+## MCP 协议支持（v0.9 新增）
+
+**code-detector** 从 v0.9 起支持 [MCP（Model Context Protocol）](https://modelcontextprotocol.io/) 服务器模式，让 AI 客户端（如 Claude Desktop）可以直接与 code-detector 交互，实时查询项目函数数据。
+
+### 启动方式
+
+```cmd
+code-detector -mcp [-db <数据库路径>]
+```
+
+通过 stdio 传输 JSON-RPC 消息，兼容所有标准 MCP 客户端。
+
+### 16 个 MCP Tool
+
+| 工具名 | 功能说明 | 对应 CLI 查询 |
+|--------|---------|-------------|
+| `get_summary` | 数据库概要统计（会话/函数/变量/语言分布） | `summary` |
+| `list_functions` | 列出所有函数（可按语言筛选） | `functions` |
+| `get_function` | 查看指定函数详情（签名/复杂度/依赖） | `func=NAME` |
+| `get_function_body` | 获取函数体源码 | （新增） |
+| `list_variables` | 列出全局变量 | `vars` |
+| `analyze_deps` | 函数调用关系统计 | `deps` |
+| `find_callers` | 查看谁调用了指定函数 | `calls=NAME` |
+| `find_dead_code` | 死代码检测 | `dead` |
+| `find_missing_deps` | 缺失依赖检测 | `missing` |
+| `top_functions` | 按行数排序 TOP N | `top=N` |
+| `deep_nesting` | 深层嵌套函数检测 | `deep=N` |
+| `high_complexity` | 高圈复杂度函数 TOP N | `complexity=N` |
+| `many_params` | 参数数量超标检测 | `params=N` |
+| `find_anonymous` | 含匿名函数的函数检测 | `anon` |
+| `file_metrics` | 文件级统计信息 | `files` |
+| `list_types` | 类型定义列表 | `types` |
+
+### 6 个 MCP Resource
+
+| URI | 内容 | 格式 |
+|-----|------|------|
+| `db://summary` | 数据库概要 | JSON |
+| `db://functions` | 全量函数列表 | JSON |
+| `db://variables` | 全局变量列表 | JSON |
+| `db://files` | 文件级统计 | JSON |
+| `db://types` | 类型定义 | JSON |
+| `db://sessions/latest` | 最近扫描会话信息 | JSON |
+
+### 使用示例（Claude Desktop 配置）
+
+在 Claude Desktop 的 `claude_desktop_config.json` 中添加：
+
+```json
+{
+  "mcpServers": {
+    "code-detector": {
+      "command": "code-detector.exe",
+      "args": ["-mcp", "-db", "D:\\projects\\myapp\\scaned_db\\scan_result.db"]
+    }
+  }
+}
+```
+
+> 配置完成后，Claude Desktop 即可直接调用上述 16 个工具和 6 个资源来查询项目代码分析结果。
+
+---
+
 ## 安全保护
 
 - 程序内置了**系统关键目录保护**，拒绝扫描 Windows 系统盘根目录、`C:\Windows`、`/etc`、`/proc` 等系统目录，避免磁盘卡死或数据损坏。
