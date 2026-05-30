@@ -52,7 +52,7 @@ var tsLangRegistry = []tsLangDef{
 		FuncQuery:  `(function_definition name: (identifier) @name body: (block) @body) @func`,
 		CallQuery:  `(call function: (identifier) @callee) @call`,
 		PkgQuery:   `(module (import_statement (dotted_name (identifier) @pkg)))`,
-		VarQuery:   ``,
+		VarQuery:   `(module (expression_statement (assignment left: (identifier) @name type: (_)? @type)) @decl)`,
 		ConstQuery: ``,
 	},
 	{
@@ -62,6 +62,9 @@ var tsLangRegistry = []tsLangDef{
 		CallQuery:  `(method_invocation name: (identifier) @callee) @call`,
 		SelCallQuery: `(method_invocation object: (_) name: (identifier) @callee) @call`,
 		PkgQuery:   `(package_declaration (scoped_identifier (identifier) @pkg))`,
+		// 注意：静态字段判断需要语义分析，此处只捕获所有顶层字段声明
+		VarQuery:   `(program (field_declaration declarator: (variable_declarator name: (identifier) @name)) @decl)`,
+		ConstQuery: ``,
 	},
 	{
 		Name: "javascript", Extensions: []string{".js", ".jsx", ".mjs"},
@@ -69,6 +72,8 @@ var tsLangRegistry = []tsLangDef{
 		FuncQuery:  `(function_declaration name: (identifier) @name body: (statement_block) @body) @func`,
 		CallQuery:  `(call_expression function: (identifier) @callee) @call`,
 		SelCallQuery: `(call_expression function: (member_expression property: (property_identifier) @callee)) @call`,
+		VarQuery:   `(program (lexical_declaration (variable_declarator name: (identifier) @name type: (_)? @type)) @decl)`,
+		ConstQuery: `(program (lexical_declaration (variable_declarator name: (identifier) @name type: (_)? @type)) @decl)`,
 	},
 	{
 		Name: "typescript", Extensions: []string{".ts", ".tsx"},
@@ -76,6 +81,8 @@ var tsLangRegistry = []tsLangDef{
 		FuncQuery:  `(function_declaration name: (identifier) @name body: (statement_block) @body) @func`,
 		CallQuery:  `(call_expression function: (identifier) @callee) @call`,
 		SelCallQuery: `(call_expression function: (member_expression property: (property_identifier) @callee)) @call`,
+		VarQuery:   `(program (lexical_declaration (variable_declarator name: (identifier) @name type: (_)? @type)) @decl)`,
+		ConstQuery: `(program (lexical_declaration (variable_declarator name: (identifier) @name type: (_)? @type)) @decl)`,
 	},
 	{
 		Name: "cpp", Extensions: []string{".cpp", ".cxx", ".cc", ".c", ".h", ".hpp"},
@@ -83,6 +90,9 @@ var tsLangRegistry = []tsLangDef{
 		FuncQuery:  `(function_definition declarator: (function_declarator declarator: (identifier) @name) body: (compound_statement) @body) @func`,
 		CallQuery:  `(call_expression function: (identifier) @callee) @call`,
 		SelCallQuery: `(call_expression function: (field_expression field: (field_identifier) @callee)) @call`,
+		// C/C++ 顶层声明: const/static 变量, 普通全局变量
+		VarQuery:   `(translation_unit (declaration declarator: (identifier) @name type: (_)? @type) @decl)`,
+		ConstQuery: `(translation_unit (declaration declarator: (identifier) @name type: (_)? @type) @decl)`,
 	},
 	{
 		Name: "rust", Extensions: []string{".rs"},
@@ -90,6 +100,8 @@ var tsLangRegistry = []tsLangDef{
 		FuncQuery:  `(function_item name: (identifier) @name body: (block) @body) @func`,
 		CallQuery:  `(call_expression function: (identifier) @callee) @call`,
 		SelCallQuery: `(call_expression function: (scoped_identifier name: (identifier) @callee)) @call`,
+		VarQuery:   `(source_file (static_item name: (identifier) @name type: (_)? @type value: (_)? @value) @decl)`,
+		ConstQuery: `(source_file (const_item name: (identifier) @name type: (_)? @type value: (_)? @value) @decl)`,
 	},
 	{
 		Name: "ruby", Extensions: []string{".rb"},
@@ -97,6 +109,9 @@ var tsLangRegistry = []tsLangDef{
 		FuncQuery:  `(method name: (identifier) @name body: (body_statement) @body) @func`,
 		CallQuery:  `(call method: (identifier) @callee) @call`,
 		PkgQuery:   ``,
+		// Ruby 全局变量以 $ 开头，常量以大写字母开头
+		VarQuery:   `(program (assignment left: (identifier) @name value: (_)? @value) @decl)`,
+		ConstQuery: ``,
 	},
 	{
 		Name: "csharp", Extensions: []string{".cs"},
@@ -104,6 +119,8 @@ var tsLangRegistry = []tsLangDef{
 		FuncQuery:  `(method_declaration name: (identifier) @name body: (block) @body) @func`,
 		CallQuery:  `(invocation_expression function: (identifier) @callee) @call`,
 		SelCallQuery: `(invocation_expression function: (member_access_expression name: (identifier) @callee)) @call`,
+		VarQuery:   `(compilation_unit (field_declaration declarator: (variable_declarator name: (identifier) @name type: (_)? @type)) @decl)`,
+		ConstQuery: `(compilation_unit (field_declaration declarator: (variable_declarator name: (identifier) @name type: (_)? @type)) @decl)`,
 	},
 	{
 		Name: "typescript", Extensions: []string{".ts"},
@@ -125,6 +142,9 @@ var tsLangRegistry = []tsLangDef{
 		FuncQuery:  `(function_declaration name: (simple_identifier) @name body: (function_body) @body) @func`,
 		CallQuery:  `(call_expression function: (simple_identifier) @callee) @call`,
 		SelCallQuery: `(call_expression function: (member_access_expression member: (simple_identifier) @callee)) @call`,
+		// Swift: 顶层 var/let 声明
+		VarQuery:   `(source_file (variable_declaration (pattern_binding name: (simple_identifier) @name type: (_)? @type)) @decl)`,
+		ConstQuery: ``,
 	},
 	{
 		Name: "kotlin", Extensions: []string{".kt", ".kts"},
@@ -132,12 +152,18 @@ var tsLangRegistry = []tsLangDef{
 		FuncQuery:  `(function_declaration name: (simple_identifier) @name body: (function_body) @body) @func`,
 		CallQuery:  `(call_expression function: (simple_identifier) @callee) @call`,
 		SelCallQuery: `(call_expression function: (navigation_expression navigation_suffix: (simple_identifier) @callee)) @call`,
+		// Kotlin: 顶层 var/val 属性
+		VarQuery:   `(source_file (property_declaration (variable_declaration name: (simple_identifier) @name type: (_)? @type)) @decl)`,
+		ConstQuery: ``,
 	},
 	{
 		Name: "php", Extensions: []string{".php"},
 		GetLang:    phpGetLang,
 		FuncQuery:  `(function_definition name: (name) @name body: (body) @body) @func`,
 		CallQuery:  `(function_call_expression function: (name) @callee) @call`,
+		// PHP: 顶层 $变量 + const 声明
+		VarQuery:   `(program (expression_statement (assignment left: (variable_name (name) @name) right: (_) @value)) @decl)`,
+		ConstQuery: `(program (const_declaration (const_element name: (name) @name value: (_) @value)) @decl)`,
 	},
 	{
 		Name: "lua", Extensions: []string{".lua"},
@@ -145,6 +171,8 @@ var tsLangRegistry = []tsLangDef{
 		FuncQuery:  `(function_declaration name: (identifier) @name body: (block) @body) @func`,
 		CallQuery:  `(function_call function: (identifier) @callee) @call`,
 		SelCallQuery: `(function_call function: (dot_index_expression field: (identifier) @callee)) @call`,
+		// Lua: 全局变量 = 模块级别的赋值
+		VarQuery:   `(program (assignment_statement variable: (identifier) @name value: (_)? @value) @decl)`,
 	},
 	{
 		Name: "scala", Extensions: []string{".scala"},
@@ -152,6 +180,9 @@ var tsLangRegistry = []tsLangDef{
 		FuncQuery:  `(function_definition name: (identifier) @name body: (block) @body) @func`,
 		CallQuery:  `(call_expression function: (identifier) @callee) @call`,
 		SelCallQuery: `(call_expression function: (selector_expression member: (identifier) @callee)) @call`,
+		// Scala: val/var 定义
+		VarQuery:   `(source_file (val_definition (identifier) @name type: (_)? @type value: (_)? @value) @decl)`,
+		ConstQuery: ``,
 	},
 }
 
@@ -230,9 +261,147 @@ func (p *TreeSitterParser) Parse(filePath string, content []byte) ([]*model.Func
 	return results, nil
 }
 
+// tsGlobalsFor 用 tree-sitter 查询提取单个文件中的全局变量
+// queryStr 是 VarQuery 或 ConstQuery，要求捕获: @name, @type(可选), @value(可选), @decl
+// topLevelType 是顶层节点的类型名（如 "source_file", "program", "module"）
+func tsGlobalsFor(root *sitter.Node, queryStr string, content []byte, lang *sitter.Language, topLevelType string) []globVar {
+	if queryStr == "" {
+		return nil
+	}
+	q := tsAllQueries.get(lang, queryStr)
+	if q == nil {
+		return nil
+	}
+	cursor := sitter.NewQueryCursor()
+	if cursor == nil {
+		return nil
+	}
+	defer cursor.Close()
+	cursor.Exec(q, root)
+
+	type quad struct {
+		name      string
+		typeStr   string
+		lineNum   int
+	}
+	var results []globVar
+	for {
+		m, ok := cursor.NextMatch()
+		if !ok {
+			break
+		}
+		var isTopLevel bool
+		var pairs []quad
+		for _, c := range m.Captures {
+			if c.Node == nil {
+				continue
+			}
+			switch q.CaptureNameForId(c.Index) {
+			case "decl":
+				parent := c.Node.Parent()
+				isTopLevel = parent != nil && parent.Type() == topLevelType
+			case "name":
+				pairs = append(pairs, quad{
+					name:    strings.TrimSpace(c.Node.Content(content)),
+					lineNum: int(c.Node.StartPoint().Row) + 1,
+				})
+			case "type":
+				if len(pairs) > 0 {
+					pairs[len(pairs)-1].typeStr = strings.TrimSpace(c.Node.Content(content))
+				}
+			}
+		}
+		if isTopLevel {
+			for _, p := range pairs {
+				if p.name != "" {
+					results = append(results, globVar{name: p.name, typeStr: p.typeStr, lineNum: p.lineNum})
+				}
+			}
+		}
+	}
+	return results
+}
+
+// globVar 内部辅助结构，表示一个全局变量条目
+type globVar struct {
+	name    string
+	typeStr string
+	lineNum int
+}
+
 func (p *TreeSitterParser) Globals(filePath string, content []byte) ([]*model.GlobalVariable, error) {
-	// 大部分语言暂不支持 tree-sitter 全局变量提取（TODO）
-	return nil, nil
+	def := p.def
+	lang := def.GetLang()
+	root, err := tsParseRootFor(content, lang)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", filePath, err)
+	}
+
+	// 确定当前语言的顶层节点类型名
+	topLevelType := topLevelNodeName(def.Name)
+	pkgName := tsFirstFor(root, def.PkgQuery, "pkg", content, lang)
+	var results []*model.GlobalVariable
+
+	// Var 全局变量
+	vars := tsGlobalsFor(root, def.VarQuery, content, lang, topLevelType)
+	for _, v := range vars {
+		results = append(results, &model.GlobalVariable{
+			Name: v.name, VarType: v.typeStr, Language: def.Name,
+			PackageName: pkgName, Visibility: visibilityFromName(v.name),
+			FilePath: filepath.ToSlash(filePath), LineNum: v.lineNum, IsConst: false,
+		})
+	}
+
+	// Const 常量（仅在查询不同时执行，避免与 Var 重复）
+	if def.ConstQuery != "" && def.ConstQuery != def.VarQuery {
+		consts := tsGlobalsFor(root, def.ConstQuery, content, lang, topLevelType)
+		for _, c := range consts {
+			results = append(results, &model.GlobalVariable{
+				Name: c.name, VarType: c.typeStr, Language: def.Name,
+				PackageName: pkgName, Visibility: visibilityFromName(c.name),
+				FilePath: filepath.ToSlash(filePath), LineNum: c.lineNum, IsConst: true,
+			})
+		}
+	}
+
+	return results, nil
+}
+
+// topLevelNodeName 返回各语言语法树的顶层节点类型名
+func topLevelNodeName(lang string) string {
+	switch lang {
+	case "python":
+		return "module"
+	case "java":
+		return "program"
+	case "javascript", "typescript":
+		return "program"
+	case "cpp":
+		return "translation_unit"
+	case "rust", "swift", "kotlin", "scala":
+		return "source_file"
+	case "ruby":
+		return "program"
+	case "csharp":
+		return "compilation_unit"
+	case "php":
+		return "program"
+	case "lua":
+		return "program"
+	default:
+		return "source_file"
+	}
+}
+
+// visibilityFromName 根据首字母判断可见性（多语言通用）
+func visibilityFromName(name string) string {
+	if len(name) == 0 {
+		return "private"
+	}
+	if name[0] >= 'A' && name[0] <= 'Z' {
+		return "public"
+	}
+	return "private"
 }
 
 // tsAllQueryCache 缓存 tree-sitter Query 对象，避免每次解析重复编译

@@ -86,8 +86,8 @@ const (
 	qCall       = `(call_expression function: (identifier) @callee) @call`
 	qSelCall    = `(call_expression function: (selector_expression (field_identifier) @callee)) @call`
 	qPkg        = `(source_file (package_clause (package_identifier) @pkg))`
-	qVar        = `(var_declaration (var_spec name: (identifier) @name type: (_)? @type value: (_)? @value)) @decl`
-	qConst      = `(const_declaration (const_spec name: (identifier) @name type: (_)? @type value: (_)? @value)) @decl`
+	qVar        = `(var_declaration (var_spec name: (identifier) @name type: (_)? @type) @spec) @decl`
+	qConst      = `(const_declaration (const_spec name: (identifier) @name type: (_)? @type) @spec) @decl`
 )
 
 func (p *TreeSitterGoParser) Parse(filePath string, content []byte) ([]*model.Function, error) {
@@ -147,17 +147,6 @@ func (p *TreeSitterGoParser) Globals(filePath string, content []byte) ([]*model.
 	return results, nil
 }
 
-// visibilityFromName 根据首字母判断可见性
-func visibilityFromName(name string) string {
-	if len(name) == 0 {
-		return "private"
-	}
-	if name[0] >= 'A' && name[0] <= 'Z' {
-		return "public"
-	}
-	return "private"
-}
-
 // tsEachTopLevel 只匹配 source_file 直接子级的 var/const 声明（排除局部变量）
 // 注意：一个 match 中可能包含多个 name/type 对（如 var (a int; b string)），
 // 因此需要收集所有 (name, type, line, value) 四元组并逐个回调。
@@ -181,7 +170,7 @@ func tsEachTopLevel(root *sitter.Node, queryStr string, content []byte, fn func(
 		}
 
 		var isTopLevel bool
-		// 一个 match 中可能有多个 name/type/value/line 组合（grouped var/const）
+		// 一个 match 中可能有多个 name/type/line 组合（grouped var/const）
 		type quad struct {
 			name      string
 			typeStr   string
@@ -198,17 +187,19 @@ func tsEachTopLevel(root *sitter.Node, queryStr string, content []byte, fn func(
 				parent := c.Node.Parent()
 				isTopLevel = parent != nil && parent.Type() == "source_file"
 			case "name":
+				// 从 name 节点的父节点（var_spec / const_spec）查找 value 子节点
+				var valueNode *sitter.Node
+				if parentSpec := c.Node.Parent(); parentSpec != nil {
+					valueNode = findValueChild(parentSpec)
+				}
 				pairs = append(pairs, quad{
-					name:    strings.TrimSpace(c.Node.Content(content)),
-					lineNum: int(c.Node.StartPoint().Row) + 1,
+					name:      strings.TrimSpace(c.Node.Content(content)),
+					lineNum:   int(c.Node.StartPoint().Row) + 1,
+					valueNode: valueNode,
 				})
 			case "type":
 				if len(pairs) > 0 {
 					pairs[len(pairs)-1].typeStr = strings.TrimSpace(c.Node.Content(content))
-				}
-			case "value":
-				if len(pairs) > 0 {
-					pairs[len(pairs)-1].valueNode = c.Node
 				}
 			}
 		}
@@ -222,13 +213,111 @@ func tsEachTopLevel(root *sitter.Node, queryStr string, content []byte, fn func(
 	}
 }
 
+// findValueChild 在 var_spec / const_spec 节点的子节点中查找 value 表达式
+// 遍历所有子节点，返回最后一个非 name/type 的节点
+func findValueChild(specNode *sitter.Node) *sitter.Node {
+	if specNode == nil || specNode.ChildCount() == 0 {
+		return nil
+	}
+	var lastExpr *sitter.Node
+	for i := 0; i < int(specNode.ChildCount()); i++ {
+		child := specNode.Child(i)
+		if child == nil {
+			continue
+		}
+		ct := child.Type()
+		// 跳过 name (identifier)
+		if ct == "identifier" || ct == "field_identifier" {
+			continue
+		}
+		// 跳过标点符号
+		if ct == "=" || ct == "," || ct == ";" {
+			continue
+		}
+		// 跳过类型节点
+		switch ct {
+		case "qualified_type", "pointer_type", "type_identifier",
+			"generic_type", "array_type", "slice_type",
+			"map_type", "channel_type", "struct_type",
+			"interface_type", "function_type", "named_type":
+			continue
+		}
+		// 其余节点视为 value 表达式（如 interpreted_string_literal 等）
+		lastExpr = child
+	}
+	return lastExpr
+}
+
 // inferTypeFromValue 当变量没有显式类型标注时，从 value 节点推断类型
-// value 是 tree-sitter AST 中的值表达式节点（var_spec / const_spec 的 value 子节点）
+// 先尝试 AST 节点类型推断，失败后回退到源码文本分析
 func inferTypeFromValue(valueNode *sitter.Node, content []byte) string {
 	if valueNode == nil {
 		return ""
 	}
-	switch valueNode.Type() {
+	// 方法1: 从 value 源码文本推断
+	valText := valueNode.Content(content)
+
+	// 字符串
+	if len(valText) >= 2 && (valText[0] == '"' || valText[0] == '`') {
+		if valText[0] == '`' || valText[len(valText)-1] == '"' {
+			return "string"
+		}
+	}
+	// 布尔
+	if valText == "true" || valText == "false" {
+		return "bool"
+	}
+	// nil
+	if valText == "nil" {
+		return "untyped nil"
+	}
+	// 数字（int 或 float）
+	if len(valText) > 0 && (valText[0] >= '0' && valText[0] <= '9') {
+		isFloat := false
+		for _, ch := range valText {
+			if ch == '.' || ch == 'e' || ch == 'E' {
+				isFloat = true
+				break
+			}
+		}
+		if isFloat {
+			return "float64"
+		}
+		return "int"
+	}
+	// 复合字面量: Type{...}
+	if len(valText) > 0 && valText[len(valText)-1] == '}' {
+		// 提取 { 之前的类型名
+		if braceIdx := strings.IndexByte(valText, '{'); braceIdx > 0 {
+			typePart := strings.TrimSpace(valText[:braceIdx])
+			// 去除 & 前缀 (如 &Type{})
+			typePart = strings.TrimPrefix(typePart, "&")
+			if typePart != "" {
+				return typePart
+			}
+		}
+	}
+	// 函数调用: 提取函数名作为类型提示
+	if parenIdx := strings.IndexByte(valText, '('); parenIdx > 0 {
+		funcName := strings.TrimSpace(valText[:parenIdx])
+		if funcName != "" {
+			return funcName
+		}
+	}
+
+	// 方法2: 展开 expression 包装后 AST 节点类型推断
+	n := valueNode
+	for n != nil && n.ChildCount() > 0 {
+		if n.Type() == "expression" {
+			n = n.Child(0)
+			continue
+		}
+		break
+	}
+	if n == nil {
+		return ""
+	}
+	switch n.Type() {
 	case "interpreted_string_literal", "raw_string_literal":
 		return "string"
 	case "int_literal":
@@ -242,40 +331,44 @@ func inferTypeFromValue(valueNode *sitter.Node, content []byte) string {
 	case "nil":
 		return "untyped nil"
 	case "composite_literal":
-		// composite_literal 的第一个命名子节点是类型名
-		for i := 0; i < int(valueNode.ChildCount()); i++ {
-			child := valueNode.Child(i)
-			childType := child.Type()
-			// 跳过匿名字段、{ } 括号
-			if childType == "literal_value" || childType == "{" || childType == "}" {
+		for i := 0; i < int(n.ChildCount()); i++ {
+			child := n.Child(i)
+			if child == nil {
+				continue
+			}
+			ct := child.Type()
+			if ct == "{" || ct == "}" || ct == "literal_value" {
 				continue
 			}
 			return child.Content(content)
 		}
 		return ""
 	case "call_expression":
-		// call_expression 的 function 子节点给出函数名
-		// 如 context.Background() → 返回 "context.Background"
-		for i := 0; i < int(valueNode.ChildCount()); i++ {
-			child := valueNode.Child(i)
+		for i := 0; i < int(n.ChildCount()); i++ {
+			child := n.Child(i)
+			if child == nil {
+				continue
+			}
 			if child.Type() == "identifier" || child.Type() == "selector_expression" {
 				return child.Content(content)
 			}
 		}
 		return ""
 	case "type_conversion_expression":
-		// type_conversion_expression 的 type 子节点
-		for i := 0; i < int(valueNode.ChildCount()); i++ {
-			child := valueNode.Child(i)
-			if child.Type() != "(" && child.Type() != ")" && child.Type() != "argument_list" {
+		for i := 0; i < int(n.ChildCount()); i++ {
+			child := n.Child(i)
+			if child == nil {
+				continue
+			}
+			ct := child.Type()
+			if ct != "(" && ct != ")" && ct != "argument_list" {
 				return child.Content(content)
 			}
 		}
 		return ""
 	case "unary_expression":
-		// 如 -1 或 !true
-		if valueNode.ChildCount() >= 2 {
-			operand := valueNode.Child(int(valueNode.ChildCount()) - 1)
+		if n.ChildCount() >= 2 {
+			operand := n.Child(int(n.ChildCount()) - 1)
 			return inferTypeFromValue(operand, content)
 		}
 		return ""
@@ -284,10 +377,7 @@ func inferTypeFromValue(valueNode *sitter.Node, content []byte) string {
 	case "function_literal":
 		return "func"
 	case "slice_literal":
-		return "[]"
-	case "keyed_element":
-		// map/slice 中的元素，回退
-		return ""
+		return "[]int"
 	default:
 		return ""
 	}
